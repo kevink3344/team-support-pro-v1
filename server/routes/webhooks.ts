@@ -6,6 +6,7 @@ import {
 } from '../feedback.js'
 import {
   listWebhookConfigs,
+  listAllWebhookConfigs,
   createWebhookConfig,
   updateWebhookConfig,
   deleteWebhookConfig,
@@ -41,7 +42,10 @@ webhooksRouter.patch('/feedback', requireAdmin, (req, res) => {
 
 webhooksRouter.get('/webhooks', requireSuperAdmin, async (req, res) => {
   const user = req.user!
-  const configs = await listWebhookConfigs(user.organizationId)
+  const isSuperAdmin = user.role === 'Super Admin'
+  const configs = isSuperAdmin
+    ? await listAllWebhookConfigs()
+    : await listWebhookConfigs(user.organizationId)
   res.json({ webhooks: configs })
 })
 

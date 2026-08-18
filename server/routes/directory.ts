@@ -164,7 +164,8 @@ directoryRouter.delete('/organizations/:organizationId', requireSuperAdmin, asyn
 
 directoryRouter.get('/teams', requireAuth, async (req, res) => {
   try {
-    res.json({ teams: await listTeams(req.user!.organizationId) })
+    const orgFilter = req.user!.role === 'Super Admin' ? undefined : req.user!.organizationId
+    res.json({ teams: await listTeams(orgFilter) })
   } catch (error) {
     console.error('Loading teams failed.', error)
     res.status(500).json({ error: 'team_load_failed' })
@@ -327,7 +328,8 @@ directoryRouter.delete('/organizations/:organizationId/ticket-layout/versions/:v
 
 directoryRouter.get('/categories', requireAuth, async (req, res) => {
   try {
-    res.json({ categories: await listCategories(req.user!.organizationId) })
+    const orgFilter = req.user!.role === 'Super Admin' ? undefined : req.user!.organizationId
+    res.json({ categories: await listCategories(orgFilter) })
   } catch (error) {
     console.error('Loading categories failed.', error)
     res.status(500).json({ error: 'category_load_failed' })
@@ -408,7 +410,8 @@ directoryRouter.delete('/categories/:categoryId', requireAdmin, async (req, res)
 
 directoryRouter.get('/users', requireAuth, async (req, res) => {
   try {
-    res.json({ users: await listUsers(req.user!.organizationId) })
+    const orgFilter = req.user!.role === 'Super Admin' ? undefined : req.user!.organizationId
+    res.json({ users: await listUsers(orgFilter) })
   } catch (error) {
     console.error('Loading users failed.', error)
     res.status(500).json({ error: 'user_load_failed' })

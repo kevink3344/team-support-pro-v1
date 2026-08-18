@@ -317,6 +317,7 @@ const ensureBootstrapAdmin = async () => {
   }
 
   const teamId = serverConfig.fallbackTeam.id || 'it'
+  const bootstrapRole = serverConfig.superAdminEnabled ? 'Super Admin' : 'Admin'
   const existingUser = await db.execute({
     sql: 'SELECT Id AS id FROM Users WHERE LOWER(Email) = LOWER(?) LIMIT 1',
     args: [adminEmail],
@@ -324,15 +325,15 @@ const ensureBootstrapAdmin = async () => {
 
   if (existingUser?.id) {
     await db.execute({
-      sql: "UPDATE Users SET Name = ?, DisplayName = ?, TeamId = ?, Role = 'Admin', UpdatedAt = datetime('now') WHERE Id = ?",
-      args: [adminName, adminName, teamId, String(existingUser.id)],
+      sql: "UPDATE Users SET Name = ?, DisplayName = ?, TeamId = ?, Role = ?, UpdatedAt = datetime('now') WHERE Id = ?",
+      args: [adminName, adminName, teamId, bootstrapRole, String(existingUser.id)],
     })
     return
   }
 
   await db.execute({
-    sql: "INSERT INTO Users (Id, Name, DisplayName, Email, TeamId, Role, CreatedAt, UpdatedAt) VALUES (?, ?, ?, ?, ?, 'Admin', datetime('now'), datetime('now'))",
-    args: ['u-local-admin', adminName, adminName, adminEmail, teamId],
+    sql: "INSERT INTO Users (Id, Name, DisplayName, Email, TeamId, Role, CreatedAt, UpdatedAt) VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))",
+    args: ['u-local-admin', adminName, adminName, adminEmail, teamId, bootstrapRole],
   })
 }
 

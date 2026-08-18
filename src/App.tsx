@@ -7502,6 +7502,7 @@ function App() {
               )}
             </div>
           )
+        case 'locations':
           return (
             <div className="settings-accordion-content space-y-3">
               {currentUser.role !== 'Admin' && currentUser.role !== 'Super Admin' ? (

@@ -69,6 +69,9 @@ export const hasDatabaseConfig = () => true
 const translateSql = (query: string): string => {
   let result = query
   result = result.replace(/\s+COLLATE\s+NOCASE/gi, '')
+  // Handle parameterized date('now', ?) where ? is like '-N days' (must be before generic date(col) handling)
+  result = result.replace(/date\s*\(\s*'now'\s*,\s*\?\s*\)/gi, "CAST(DATEADD(day, CAST(REPLACE(REPLACE(?, ' days', ''), ' day', '') AS INT), GETUTCDATE()) AS DATE)")
+  result = result.replace(/datetime\s*\(\s*'now'\s*,\s*\?\s*\)/gi, "DATEADD(day, CAST(REPLACE(REPLACE(?, ' days', ''), ' day', '') AS INT), GETUTCDATE())")
   result = result.replace(/datetime\s*\(\s*'now'\s*,\s*'-(\d+)\s+days'\s*\)/gi, 'DATEADD(day, -$1, GETUTCDATE())')
   result = result.replace(/datetime\s*\(\s*'now'\s*,\s*'-(\d+)\s+day'\s*\)/gi, 'DATEADD(day, -$1, GETUTCDATE())')
   result = result.replace(/datetime\s*\(\s*'now'\s*\)/gi, 'GETUTCDATE()')
@@ -78,6 +81,9 @@ const translateSql = (query: string): string => {
     if (String(col).trim().startsWith("'")) return match
     return `CAST(${String(col).trim()} AS DATE)`
   })
+  // SQLite rowid -> CreatedAt for SQL Server (rowid doesn't exist)
+  result = result.replace(/\bORDER\s+BY\s+rowid\b/gi, 'ORDER BY CreatedAt')
+  result = result.replace(/\browid\b/gi, 'CreatedAt')
   result = result.replace(/julianday\s*\(\s*([^)]+)\s*\)\s*-\s*julianday\s*\(\s*([^)]+)\s*\)/gi, 'CAST(DATEDIFF(second, $2, $1) AS FLOAT) / 86400.0')
   result = result.replace(/julianday\s*\(\s*'now'\s*\)\s*-\s*julianday\s*\(\s*([^)]+)\s*\)/gi, 'CAST(DATEDIFF(second, $1, GETUTCDATE()) AS FLOAT) / 86400.0')
   // INSERT OR IGNORE -> INSERT (duplicate handling via TRY/CATCH in runMssql)

@@ -228,7 +228,7 @@ export const listTickets = async (scope: string | TicketListScope | undefined): 
   const allActivity = await listTicketActivity()
   const ticketIds = new Set(tickets.map((t) => t.id))
 
-  const cfSql = `SELECT Id AS id, TicketId AS ticketId, FieldId AS fieldId, FieldLabel AS fieldLabel, FieldType AS fieldType, Value AS value FROM TicketCustomFieldValues WHERE TicketId IN (SELECT Id FROM Tickets${whereSql}) ORDER BY rowid ASC`
+  const cfSql = `SELECT Id AS id, TicketId AS ticketId, FieldId AS fieldId, FieldLabel AS fieldLabel, FieldType AS fieldType, Value AS value FROM TicketCustomFieldValues WHERE TicketId IN (SELECT Id FROM Tickets${whereSql}) ORDER BY CreatedAt ASC`
   const cfRows = await dbAll(db, cfSql, whereArgs) as Array<{ id: unknown; ticketId: unknown; fieldId: unknown; fieldLabel: unknown; fieldType: unknown; value: unknown }>
 
   const customFieldsByTicket = new Map<string, TicketCustomFieldValue[]>()
@@ -243,7 +243,7 @@ export const listTickets = async (scope: string | TicketListScope | undefined): 
 }
 
 const getCustomFieldValues = async (db: Client, ticketId: string): Promise<TicketCustomFieldValue[]> => {
-  const rows = await dbAll(db, 'SELECT Id AS id, TicketId AS ticketId, FieldId AS fieldId, FieldLabel AS fieldLabel, FieldType AS fieldType, Value AS value FROM TicketCustomFieldValues WHERE TicketId = ? ORDER BY rowid ASC', [ticketId]) as Array<{ id: unknown; ticketId: unknown; fieldId: unknown; fieldLabel: unknown; fieldType: unknown; value: unknown }>
+  const rows = await dbAll(db, 'SELECT Id AS id, TicketId AS ticketId, FieldId AS fieldId, FieldLabel AS fieldLabel, FieldType AS fieldType, Value AS value FROM TicketCustomFieldValues WHERE TicketId = ? ORDER BY CreatedAt ASC', [ticketId]) as Array<{ id: unknown; ticketId: unknown; fieldId: unknown; fieldLabel: unknown; fieldType: unknown; value: unknown }>
   return rows.map((row) => ({ id: String(row.id), ticketId: String(row.ticketId), fieldId: String(row.fieldId), fieldLabel: String(row.fieldLabel), fieldType: String(row.fieldType), value: String(row.value) }))
 }
 

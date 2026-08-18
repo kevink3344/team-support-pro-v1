@@ -57,6 +57,14 @@ export const translateSql = (sql: string): string => {
   // Remove COLLATE NOCASE (SQL Server is CI by default)
   result = result.replace(/\s+COLLATE\s+NOCASE/gi, '')
 
+  // Parameterized date('now', ?) / datetime('now', ?) where ? is like '-N days'
+  result = result.replace(/date\s*\(\s*'now'\s*,\s*\?\s*\)/gi, "CAST(DATEADD(day, CAST(REPLACE(REPLACE(?, ' days', ''), ' day', '') AS INT), GETUTCDATE()) AS DATE)")
+  result = result.replace(/datetime\s*\(\s*'now'\s*,\s*\?\s*\)/gi, "DATEADD(day, CAST(REPLACE(REPLACE(?, ' days', ''), ' day', '') AS INT), GETUTCDATE())")
+
+  // SQLite rowid -> CreatedAt for SQL Server
+  result = result.replace(/\bORDER\s+BY\s+rowid\b/gi, 'ORDER BY CreatedAt')
+  result = result.replace(/\browid\b/gi, 'CreatedAt')
+
   // datetime('now', '-N days') -> DATEADD(day, -N, GETUTCDATE())
   result = result.replace(/datetime\s*\(\s*'now'\s*,\s*'-(\d+)\s+days'\s*\)/gi, 'DATEADD(day, -$1, GETUTCDATE())')
   result = result.replace(/datetime\s*\(\s*'now'\s*,\s*'-(\d+)\s+day'\s*\)/gi, 'DATEADD(day, -$1, GETUTCDATE())')

@@ -64,6 +64,12 @@ export const listWebhookConfigs = async (organizationId: string): Promise<Webhoo
   return rows.map((r) => mapRow(r as unknown as WebhookConfigRow))
 }
 
+export const listAllWebhookConfigs = async (): Promise<WebhookConfig[]> => {
+  const db = getDb()
+  const rows = await dbAll(db, 'SELECT * FROM WebhookConfigs ORDER BY CreatedAt ASC')
+  return rows.map((r) => mapRow(r as unknown as WebhookConfigRow))
+}
+
 export const getWebhookConfig = async (id: string): Promise<WebhookConfig | null> => {
   const db = getDb()
   const row = await dbGet(db, 'SELECT * FROM WebhookConfigs WHERE Id = ?', [id])
