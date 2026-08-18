@@ -16,11 +16,9 @@ let sqlPool: sql.ConnectionPool | null = null
 export const getDb = (): Client => {
   const mode = serverConfig.db.mode
   if (mode === 'sqlserver') {
-    // Return a stub — SQL Server callers go through getPool() via the helpers
     if (!client) {
-      // Create a noop libsql client (unused) to satisfy TypeScript callers
-      // Actual queries are routed through mssql pool in dbGet/dbAll/dbRun
-      client = createClient({ url: 'file::memory:' })
+      // Create a proxy Client that routes execute/batch through mssql with dialect translation
+      client = createSqlServerProxy() as unknown as Client
     }
     return client
   }
@@ -33,7 +31,15 @@ export const getDb = (): Client => {
     }
     return client
   }
-  throw new Error(`DB_MODE "${mode}" is not configured. Set DB_MODE to "turso" or "sqlserver" in your .env file.`)
+  if (mode === 'sqlite') {
+    if (!client) {
+      const sqlitePath = serverConfig.db.sqlitePath || './data.db'
+      client = createClient({ url: `file:${sqlitePath}` })
+      console.log(`Database: connected to local SQLite (${sqlitePath})`)
+    }
+    return client
+  }
+  throw new Error(`DB_MODE "${mode}" is not configured. Set DB_MODE to "turso", "sqlserver" or "sqlite" in your .env file.`)
 }
 
 export const getPool = async (): Promise<sql.ConnectionPool> => {
@@ -57,20 +63,252 @@ export const getPool = async (): Promise<sql.ConnectionPool> => {
 export const hasDatabaseConfig = () => true
 
 // ---------------------------------------------------------------------------
-// Query helpers — wrap libsql execute for convenience
+// SQL Server dialect translation & helpers
 // ---------------------------------------------------------------------------
 
-// Convert SQLite-style ? positional args to SQL Server @p1, @p2, ... named params
+const translateSql = (query: string): string => {
+  let result = query
+  result = result.replace(/\s+COLLATE\s+NOCASE/gi, '')
+  result = result.replace(/datetime\s*\(\s*'now'\s*,\s*'-(\d+)\s+days'\s*\)/gi, 'DATEADD(day, -$1, GETUTCDATE())')
+  result = result.replace(/datetime\s*\(\s*'now'\s*,\s*'-(\d+)\s+day'\s*\)/gi, 'DATEADD(day, -$1, GETUTCDATE())')
+  result = result.replace(/datetime\s*\(\s*'now'\s*\)/gi, 'GETUTCDATE()')
+  result = result.replace(/date\s*\(\s*'now'\s*,\s*'-(\d+)\s+days'\s*\)/gi, 'CAST(DATEADD(day, -$1, GETUTCDATE()) AS DATE)')
+  result = result.replace(/date\s*\(\s*'now'\s*\)/gi, 'CAST(GETUTCDATE() AS DATE)')
+  result = result.replace(/\bdate\s*\(\s*([^)'"]+)\s*\)/gi, (match, col) => {
+    if (String(col).trim().startsWith("'")) return match
+    return `CAST(${String(col).trim()} AS DATE)`
+  })
+  result = result.replace(/julianday\s*\(\s*([^)]+)\s*\)\s*-\s*julianday\s*\(\s*([^)]+)\s*\)/gi, 'CAST(DATEDIFF(second, $2, $1) AS FLOAT) / 86400.0')
+  result = result.replace(/julianday\s*\(\s*'now'\s*\)\s*-\s*julianday\s*\(\s*([^)]+)\s*\)/gi, 'CAST(DATEDIFF(second, $1, GETUTCDATE()) AS FLOAT) / 86400.0')
+  // INSERT OR IGNORE -> INSERT (duplicate handling via TRY/CATCH in runMssql)
+  result = result.replace(/\bINSERT\s+OR\s+IGNORE\s+INTO\b/gi, 'INSERT INTO')
+  // Wrap reserved word Key (avoid double-wrapping)
+  result = result.replace(/(?<!\[)\bKey\b(?!\])/g, '[Key]')
+  result = result.replace(/(?<!\[)"Key"(?!\])/g, '[Key]')
+  return result
+}
+
 const toMssqlSql = (query: string): string => {
   let i = 0
   return query.replace(/\?/g, () => `@p${++i}`)
 }
 
-const runMssql = async (query: string, args: InValue[] = []) => {
+const handleLimit = (query: string, args: InValue[]): { query: string; args: InValue[] } => {
+  const limitMatch = query.match(/\bLIMIT\s+\?/i)
+  if (!limitMatch) return { query, args }
+  const limitValue = args[args.length - 1]
+  const remainingArgs = args.slice(0, -1)
+  const newQuery = query.replace(/\bLIMIT\s+\?/i, '').trim()
+  const topQuery = newQuery.replace(/\bSELECT\s+(DISTINCT\s+)?/i, (_match, distinct) => `SELECT ${distinct || ''}TOP ${Number(limitValue)} `)
+  return { query: topQuery, args: remainingArgs }
+}
+
+const handleLiteralLimit = (query: string): string => {
+  const match = query.match(/\bLIMIT\s+(\d+)\s*;?\s*$/i)
+  if (!match) return query
+  const n = match[1]
+  const withoutLimit = query.replace(/\bLIMIT\s+\d+\s*;?\s*$/i, '').trim()
+  return withoutLimit.replace(/\bSELECT\s+(DISTINCT\s+)?/i, (_m, distinct) => `SELECT ${distinct || ''}TOP ${n} `)
+}
+
+const normalizeRow = (row: Record<string, unknown>): Record<string, unknown> => {
+  const normalized: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(row)) {
+    if (value === null || value === undefined) normalized[key] = value
+    else if (typeof value === 'boolean') normalized[key] = value ? 1 : 0
+    else if (value instanceof Date) normalized[key] = (value as Date).toISOString()
+    else if (typeof value === 'string' && /^\d+$/.test(value) && value.length > 10) {
+      const num = Number(value)
+      normalized[key] = Number.isSafeInteger(num) ? num : value
+    } else normalized[key] = value
+  }
+  return normalized
+}
+
+const isDuplicateKeyError = (err: unknown): boolean => {
+  const msg = err instanceof Error ? err.message : String(err)
+  return msg.includes('2627') || msg.includes('2601') || /duplicate/i.test(msg) || /already exists/i.test(msg)
+}
+
+const runMssql = async (query: string, args: InValue[] = []): Promise<sql.IResult<unknown>> => {
+  // Intercept pragma_table_info (SQLite only) — return empty for SQL Server
+  if (/pragma_table_info/i.test(query)) {
+    return { recordset: [], recordsets: [], rowsAffected: [0], output: {}, } as unknown as sql.IResult<unknown>
+  }
+
+  // Handle ON CONFLICT upserts
+  const onConflictMatch = query.match(/ON\s+CONFLICT\s*\(([^)]+)\)\s+DO\s+UPDATE\s+SET\s+(.+?)(?:\s*ON\s+CONFLICT|\s*$)/is)
+  if (onConflictMatch) {
+    return runUpsert(query, args, onConflictMatch)
+  }
+  const onConflictDoNothing = query.match(/ON\s+CONFLICT\s*\([^)]+\)\s+DO\s+NOTHING/i)
+  if (onConflictDoNothing) {
+    return runInsertOrIgnore(query, args)
+  }
+
+  const hadInsertOrIgnore = /\bINSERT\s+OR\s+IGNORE\b/i.test(query)
+
+  let translated = translateSql(query)
+  translated = handleLiteralLimit(translated)
+  const limitHandled = handleLimit(translated, args)
+  translated = limitHandled.query
+  const finalArgs = limitHandled.args
+  const mssqlSql = toMssqlSql(translated)
+
   const pool = await getPool()
   const req = pool.request()
-  args.forEach((v, idx) => { req.input(`p${idx + 1}`, v as unknown as sql.ISqlTypeFactoryWithNoParams) })
-  return req.query(toMssqlSql(query))
+  finalArgs.forEach((v, idx) => {
+    const paramName = `p${idx + 1}`
+    if (v === null || v === undefined) req.input(paramName, sql.NVarChar, null)
+    else if (typeof v === 'number') {
+      if (Number.isInteger(v)) req.input(paramName, sql.Int, v)
+      else req.input(paramName, sql.Float, v)
+    } else if (v instanceof Uint8Array || Buffer.isBuffer(v as unknown as Uint8Array)) req.input(paramName, sql.VarBinary, v as unknown as Buffer)
+    else req.input(paramName, sql.NVarChar, String(v))
+  })
+
+  try {
+    return await req.query(mssqlSql)
+  } catch (err) {
+    if (hadInsertOrIgnore && isDuplicateKeyError(err)) {
+      return { recordset: [], recordsets: [], rowsAffected: [0], output: {}, } as unknown as sql.IResult<unknown>
+    }
+    throw err
+  }
+}
+
+const runUpsert = async (query: string, args: InValue[], match: RegExpMatchArray): Promise<sql.IResult<unknown>> => {
+  const insertMatch = query.match(/INSERT\s+INTO\s+(\S+)\s*\(([^)]+)\)\s*VALUES\s*\(([^)]+)\)/i)
+  if (!insertMatch) {
+    const fallback = query.replace(/ON\s+CONFLICT[^;]*/gi, '')
+    return runMssql(fallback, args)
+  }
+  const table = insertMatch[1].replace(/["`\[\]]/g, '')
+  const columns = insertMatch[2].split(',').map((c) => c.trim().replace(/["`\[\]]/g, ''))
+  const conflictCol = match[1].trim().replace(/["`\[\]]/g, '')
+  const setClause = match[2].trim()
+  const setPairs = setClause.split(',').map((s) => s.trim())
+  const translatedSets: string[] = []
+  for (const pair of setPairs) {
+    const eqIdx = pair.indexOf('=')
+    if (eqIdx === -1) continue
+    const col = pair.substring(0, eqIdx).trim().replace(/["`\[\]]/g, '')
+    const val = pair.substring(eqIdx + 1).trim()
+    const excludedMatch = val.match(/excluded\.(\S+)/i)
+    if (excludedMatch) {
+      const excludedCol = excludedMatch[1].replace(/["`\[\]]/g, '')
+      const colIdx = columns.findIndex((c) => c.toLowerCase() === excludedCol.toLowerCase())
+      if (colIdx !== -1) translatedSets.push(`${col} = @p${colIdx + 1}`)
+      else translatedSets.push(`${col} = ${val}`)
+    } else if (val.toLowerCase().includes("datetime('now')") || val.toLowerCase().includes('getutcdate')) {
+      translatedSets.push(`${col} = GETUTCDATE()`)
+    } else {
+      translatedSets.push(`${col} = ${val}`)
+    }
+  }
+  const conflictIdx = columns.findIndex((c) => c.toLowerCase() === conflictCol.toLowerCase())
+  const conflictParam = conflictIdx !== -1 ? `@p${conflictIdx + 1}` : `'unknown'`
+  const bracket = (col: string) => col.toLowerCase() === 'key' ? `[${col}]` : col
+  const bracketedConflictCol = bracket(conflictCol)
+  const bracketedColumns = columns.map(bracket)
+  const bracketedSets = translatedSets.map((s) => {
+    const eqIdx = s.indexOf('=')
+    if (eqIdx === -1) return s
+    const col = s.substring(0, eqIdx).trim()
+    const val = s.substring(eqIdx + 1).trim()
+    return `${bracket(col)} = ${val}`
+  })
+  const updateSql = `IF EXISTS (SELECT 1 FROM ${table} WHERE ${bracketedConflictCol} = ${conflictParam}) UPDATE ${table} SET ${bracketedSets.join(', ')} WHERE ${bracketedConflictCol} = ${conflictParam} ELSE INSERT INTO ${table} (${bracketedColumns.join(', ')}) VALUES (${columns.map((_, i) => `@p${i + 1}`).join(', ')})`
+  const translated = translateSql(updateSql)
+  const pool = await getPool()
+  const req = pool.request()
+  args.forEach((v, idx) => {
+    const paramName = `p${idx + 1}`
+    if (v === null || v === undefined) req.input(paramName, sql.NVarChar, null)
+    else if (typeof v === 'number') {
+      if (Number.isInteger(v)) req.input(paramName, sql.Int, v)
+      else req.input(paramName, sql.Float, v)
+    } else if (v instanceof Uint8Array || Buffer.isBuffer(v as unknown as Uint8Array)) req.input(paramName, sql.VarBinary, v as unknown as Buffer)
+    else req.input(paramName, sql.NVarChar, String(v))
+  })
+  return req.query(translated)
+}
+
+const runInsertOrIgnore = async (query: string, args: InValue[]): Promise<sql.IResult<unknown>> => {
+  const insertMatch = query.match(/INSERT\s+INTO\s+(\S+)\s*\(([^)]+)\)\s*VALUES\s*\(([^)]+)\)/i)
+  const conflictMatch = query.match(/ON\s+CONFLICT\s*\(([^)]+)\)/i)
+  if (!insertMatch || !conflictMatch) {
+    const fallback = query.replace(/ON\s+CONFLICT[^;]*/gi, '')
+    return runMssql(fallback, args)
+  }
+  const table = insertMatch[1].replace(/["`\[\]]/g, '')
+  const columns = insertMatch[2].split(',').map((c) => c.trim().replace(/["`\[\]]/g, ''))
+  const conflictCol = conflictMatch[1].trim().replace(/["`\[\]]/g, '')
+  const conflictIdx = columns.findIndex((c) => c.toLowerCase() === conflictCol.toLowerCase())
+  const bracket = (col: string) => col.toLowerCase() === 'key' ? `[${col}]` : col
+  const bracketedConflictCol = bracket(conflictCol)
+  const baseInsert = query.replace(/ON\s+CONFLICT[^;]*/gi, '').trim()
+  const translated = translateSql(baseInsert)
+  const mssqlSql = toMssqlSql(translated)
+  let guardedSql: string
+  if (conflictIdx !== -1 && args.length > conflictIdx) {
+    const conflictParam = `@p${conflictIdx + 1}`
+    guardedSql = `IF NOT EXISTS (SELECT 1 FROM ${table} WHERE ${bracketedConflictCol} = ${conflictParam}) ${mssqlSql}`
+  } else if (conflictIdx !== -1) {
+    // No param supplied — extract literal value from VALUES clause
+    const rawValues = insertMatch[3].split(',').map((v) => v.trim())
+    let conflictLiteral = rawValues[conflictIdx] ?? `'unknown'`
+    conflictLiteral = conflictLiteral.replace(/datetime\s*\(\s*'now'\s*\)/gi, 'GETUTCDATE()')
+    guardedSql = `IF NOT EXISTS (SELECT 1 FROM ${table} WHERE ${bracketedConflictCol} = ${conflictLiteral}) ${mssqlSql}`
+  } else {
+    guardedSql = mssqlSql
+  }
+  const pool = await getPool()
+  const req = pool.request()
+  args.forEach((v, idx) => {
+    const paramName = `p${idx + 1}`
+    if (v === null || v === undefined) req.input(paramName, sql.NVarChar, null)
+    else if (typeof v === 'number') {
+      if (Number.isInteger(v)) req.input(paramName, sql.Int, v)
+      else req.input(paramName, sql.Float, v)
+    } else if (v instanceof Uint8Array || Buffer.isBuffer(v as unknown as Uint8Array)) req.input(paramName, sql.VarBinary, v as unknown as Buffer)
+    else req.input(paramName, sql.NVarChar, String(v))
+  })
+  return req.query(guardedSql)
+}
+
+const createSqlServerProxy = () => {
+  return {
+    execute: async (arg: string | { sql: string; args?: InValue[] }) => {
+      const sqlStr = typeof arg === 'string' ? arg : arg.sql
+      const args = typeof arg === 'string' ? [] : (arg.args ?? [])
+      if (/pragma_table_info/i.test(sqlStr)) {
+        return { rows: [], rowsAffected: 0 }
+      }
+      // Skip DDL that is SQLite-specific when in sqlserver mode (schema is external)
+      if (/CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS/i.test(sqlStr) || /ALTER\s+TABLE/i.test(sqlStr)) {
+        try {
+          const result = await runMssql(sqlStr, args)
+          return { rows: (result.recordset as unknown as Row[]) ?? [], rowsAffected: result.rowsAffected[0] ?? 0 }
+        } catch {
+          return { rows: [], rowsAffected: 0 }
+        }
+      }
+      const result = await runMssql(sqlStr, args)
+      const isSelect = /^\s*SELECT/i.test(sqlStr)
+      if (isSelect) {
+        const rows = ((result.recordset as unknown as Row[]) ?? []).map((r) => normalizeRow(r as unknown as Record<string, unknown>) as unknown as Row)
+        return { rows, rowsAffected: 0 }
+      }
+      return { rows: [], rowsAffected: result.rowsAffected[0] ?? 0 }
+    },
+    batch: async (statements: Array<{ sql: string; args: InValue[] }>) => {
+      for (const stmt of statements) {
+        await runMssql(stmt.sql, stmt.args)
+      }
+    },
+    close: () => {},
+  }
 }
 
 export const dbGet = async (
@@ -80,7 +318,8 @@ export const dbGet = async (
 ): Promise<Row | undefined> => {
   if (serverConfig.db.mode === 'sqlserver') {
     const result = await runMssql(query, args)
-    return result.recordset[0] as Row | undefined
+    const row = (result.recordset as unknown as Row[])[0]
+    return row ? (normalizeRow(row as unknown as Record<string, unknown>) as unknown as Row) : undefined
   }
   const result = await db.execute({ sql: query, args })
   return result.rows[0] as Row | undefined
@@ -93,7 +332,7 @@ export const dbAll = async (
 ): Promise<Row[]> => {
   if (serverConfig.db.mode === 'sqlserver') {
     const result = await runMssql(query, args)
-    return result.recordset as unknown as Row[]
+    return ((result.recordset as unknown as Row[]) ?? []).map((r) => normalizeRow(r as unknown as Record<string, unknown>) as unknown as Row)
   }
   const result = await db.execute({ sql: query, args })
   return result.rows as unknown as Row[]

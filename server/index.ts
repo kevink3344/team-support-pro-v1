@@ -336,12 +336,39 @@ const ensureBootstrapAdmin = async () => {
   })
 }
 
+const runStartupSeed = async () => {
+  if (!serverConfig.db.seedSqlOnStart) return
+  if (serverConfig.db.mode !== 'sqlserver') return
+  const candidates = [
+    path.join(currentDirPath, '../scripts/data-export-v1.sql'),
+    path.join(currentDirPath, '../../scripts/data-export-v1.sql'),
+    path.join(process.cwd(), 'scripts/data-export-v1.sql'),
+  ]
+  const seedPath = candidates.find((p) => fs.existsSync(p))
+  if (!seedPath) {
+    console.warn('[server] SEED_SQL_ON_START=true but no seed file found (checked scripts/data-export-v1.sql)')
+    return
+  }
+  try {
+    const { runSqlServerSeedFile } = await import('./database/db.js')
+    await runSqlServerSeedFile(seedPath)
+  } catch (err) {
+    console.error('[server] Startup seed failed:', (err as Error).message)
+  }
+}
+
 const startServer = async () => {
   try {
     await initDb()
   } catch (error) {
     console.error('Database initialization failed.', error)
     process.exit(1)
+  }
+
+  try {
+    await runStartupSeed()
+  } catch (error) {
+    console.error('Startup seed failed.', error)
   }
 
   try {

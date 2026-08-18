@@ -4677,7 +4677,7 @@ function App() {
     setChangePasswordError('')
     setChangePasswordPending(true)
     try {
-      const response = await fetch(apiUrl(`/api/users/${changePasswordModal.userId}/change-password`), {
+      const response = await fetch(apiUrl(`/api/auth/users/${changePasswordModal.userId}/change-password`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',

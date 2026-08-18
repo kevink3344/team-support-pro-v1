@@ -29,22 +29,22 @@ export const getDashboardSummary = async (
   const statsRow = teamId
     ? await dbGet(db, `
         SELECT
-          COUNT(*) AS total,
-          SUM(CASE WHEN t.Status = 'Open' THEN 1 ELSE 0 END) AS open,
-          SUM(CASE WHEN t.Status = 'In Progress' THEN 1 ELSE 0 END) AS inProgress,
-          SUM(CASE WHEN t.Status = 'Pending' THEN 1 ELSE 0 END) AS pending,
-          SUM(CASE WHEN t.Priority = 'Critical' THEN 1 ELSE 0 END) AS critical
+          COUNT(*) AS [total],
+          SUM(CASE WHEN t.Status = 'Open' THEN 1 ELSE 0 END) AS [open],
+          SUM(CASE WHEN t.Status = 'In Progress' THEN 1 ELSE 0 END) AS [inProgress],
+          SUM(CASE WHEN t.Status = 'Pending' THEN 1 ELSE 0 END) AS [pending],
+          SUM(CASE WHEN t.Priority = 'Critical' THEN 1 ELSE 0 END) AS [critical]
         FROM Tickets t
         INNER JOIN Teams tm ON tm.Id = t.TeamId
         WHERE t.TeamId = ? AND tm.OrganizationId = ?
       `, [teamId, organizationId])
     : await dbGet(db, `
         SELECT
-          COUNT(*) AS total,
-          SUM(CASE WHEN t.Status = 'Open' THEN 1 ELSE 0 END) AS open,
-          SUM(CASE WHEN t.Status = 'In Progress' THEN 1 ELSE 0 END) AS inProgress,
-          SUM(CASE WHEN t.Status = 'Pending' THEN 1 ELSE 0 END) AS pending,
-          SUM(CASE WHEN t.Priority = 'Critical' THEN 1 ELSE 0 END) AS critical
+          COUNT(*) AS [total],
+          SUM(CASE WHEN t.Status = 'Open' THEN 1 ELSE 0 END) AS [open],
+          SUM(CASE WHEN t.Status = 'In Progress' THEN 1 ELSE 0 END) AS [inProgress],
+          SUM(CASE WHEN t.Status = 'Pending' THEN 1 ELSE 0 END) AS [pending],
+          SUM(CASE WHEN t.Priority = 'Critical' THEN 1 ELSE 0 END) AS [critical]
         FROM Tickets t
         INNER JOIN Teams tm ON tm.Id = t.TeamId
         WHERE tm.OrganizationId = ?
