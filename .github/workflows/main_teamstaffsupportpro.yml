@@ -1,0 +1,116 @@
+# Docs for the Azure Web Apps Deploy action: https://github.com/Azure/webapps-deploy
+# More GitHub Actions for Azure: https://github.com/Azure/actions
+
+name: Build and deploy Node.js app to Azure Web App - teamstaffsupportpro
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read #This is required for actions/checkout
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js version
+        uses: actions/setup-node@v3
+        with:
+          node-version: '22.x'
+
+      - name: npm install, build, and test
+        run: |
+          npm install
+          npm run build --if-present
+          npm run test --if-present
+
+      - name: Verify build artifacts
+        run: |
+          set -e
+
+          INDEX="dist/index.html"
+          ASSETS_DIR="dist/assets"
+
+          if [ ! -f "$INDEX" ]; then
+            echo "ERROR: $INDEX not found. Build may have failed silently."
+            exit 1
+          fi
+
+          if [ ! -d "$ASSETS_DIR" ]; then
+            echo "ERROR: $ASSETS_DIR directory not found."
+            exit 1
+          fi
+
+          echo "Checking asset references in $INDEX..."
+          MISSING=0
+          # Extract all /assets/<filename> references from index.html
+          grep -oP '(?<=/assets/)[^\s"'\'']+' "$INDEX" | while IFS= read -r asset; do
+            ASSET_PATH="$ASSETS_DIR/$asset"
+            if [ ! -f "$ASSET_PATH" ]; then
+              echo "MISSING: $ASSET_PATH referenced in index.html but not found on disk."
+              MISSING=1
+            else
+              echo "  OK: $asset"
+            fi
+          done
+
+          if [ "$MISSING" -ne 0 ]; then
+            echo "ERROR: One or more assets referenced in index.html are missing from dist/assets."
+            exit 1
+          fi
+
+          echo "Build verification passed. All referenced assets are present."
+
+      - name: Prepare deployment package
+        run: |
+          set -e
+
+          rm -rf deploy-package
+          mkdir -p deploy-package
+
+          cp -R dist deploy-package/dist
+          cp package.json deploy-package/package.json
+          cp package-lock.json deploy-package/package-lock.json
+
+          npm prune --omit=dev
+          cp -R node_modules deploy-package/node_modules
+
+      - name: Upload artifact for deployment job
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-app
+          path: deploy-package
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      id-token: write #This is required for requesting the JWT
+      contents: read #This is required for actions/checkout
+
+    steps:
+      - name: Download artifact from build job
+        uses: actions/download-artifact@v4
+        with:
+          name: node-app
+      
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_2AAA1B220B924A8AAEAE1586AE13C7D8 }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_E8013A0C615249329A97157316DA9389 }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_08B411FEA85E434DBDB008D3D50CDF55 }}
+
+      - name: 'Deploy to Azure Web App'
+        id: deploy-to-webapp
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: 'teamstaffsupportpro'
+          slot-name: 'Production'
+          package: .
+          

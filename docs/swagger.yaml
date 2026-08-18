@@ -1,0 +1,993 @@
+openapi: 3.0.3
+info:
+  title: TeamSupportPro API
+  description: REST API for TeamSupportPro — a team-based IT support ticket management system.
+  version: 1.0.0
+servers:
+  - url: http://localhost:3001
+    description: Local development server
+
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: team_support_session
+    apiKeyHeader:
+      type: apiKey
+      in: header
+      name: x-api-key
+    bearerAuth:
+      type: http
+      scheme: bearer
+
+  schemas:
+    Team:
+      type: object
+      properties:
+        id: { type: string, example: "it" }
+        name: { type: string, example: "IT Support" }
+        code: { type: string, example: "IT" }
+        accent: { type: string, example: "#0078d4" }
+
+    Category:
+      type: object
+      properties:
+        id: { type: string, example: "cat-it-hardware" }
+        teamId: { type: string, example: "it" }
+        name: { type: string, example: "Hardware" }
+        description: { type: string, example: "Hardware issues and requests" }
+
+    User:
+      type: object
+      properties:
+        id: { type: string, example: "u-kevin" }
+        name: { type: string, example: "Kevin Key" }
+        email: { type: string, example: "kevin.key@company.com" }
+        teamId: { type: string, example: "it" }
+        role: { type: string, enum: [Admin, Staff] }
+
+    ActivityEntry:
+      type: object
+      properties:
+        id: { type: string }
+        ticketId: { type: string }
+        actor: { type: string }
+        message: { type: string }
+        at: { type: string, format: date-time }
+
+    Ticket:
+      type: object
+      properties:
+        id: { type: string, example: "TKT-10001" }
+        title: { type: string }
+        description: { type: string }
+        status: { type: string, enum: [Open, In Progress, Pending, Resolved, Closed] }
+        priority: { type: string, enum: [Low, Medium, High, Critical] }
+        teamId: { type: string }
+        categoryId: { type: string }
+        assignedToId: { type: string, nullable: true }
+        requestorName: { type: string }
+        requestorEmail: { type: string }
+        location: { type: string }
+        dueLabel: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        activity:
+          type: array
+          items: { $ref: '#/components/schemas/ActivityEntry' }
+
+    TicketAttachment:
+      type: object
+      properties:
+        id: { type: string }
+        ticketId: { type: string }
+        fileName: { type: string }
+        contentType: { type: string }
+        fileSizeBytes: { type: integer }
+        uploadedByUserId: { type: string }
+        uploadedByName: { type: string }
+        uploadedAt: { type: string, format: date-time }
+
+    DashboardSummary:
+      type: object
+      properties:
+        stats:
+          type: object
+          properties:
+            total: { type: integer }
+            open: { type: integer }
+            inProgress: { type: integer }
+            pending: { type: integer }
+            critical: { type: integer }
+        statusCounts:
+          type: array
+          items:
+            type: object
+            properties:
+              status: { type: string }
+              count: { type: integer }
+        teamWorkload:
+          type: array
+          items:
+            type: object
+            properties:
+              teamId: { type: string }
+              count: { type: integer }
+
+    TrendPoint:
+      type: object
+      properties:
+        date: { type: string, format: date }
+        values:
+          type: object
+          additionalProperties: { type: integer }
+
+    AuthUser:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        email: { type: string }
+        role: { type: string, enum: [Admin, Staff] }
+        teamId: { type: string }
+        teamName: { type: string }
+        teamCode: { type: string }
+        teamAccent: { type: string }
+        picture: { type: string }
+
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+
+    Location:
+      type: object
+      properties:
+        id: { type: string, example: "loc-a1b2c3" }
+        name: { type: string, example: "Adams Elementary School" }
+        isActive: { type: boolean, example: true }
+        sortOrder: { type: integer, example: 0 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+security:
+  - cookieAuth: []
+  - apiKeyHeader: []
+  - bearerAuth: []
+
+paths:
+  /api/health:
+    get:
+      summary: Health check
+      security: []
+      responses:
+        "200":
+          description: Server is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+
+  /api/locations:
+    get:
+      summary: List active locations (public)
+      description: Returns all active locations. No authentication required. Used to populate location dropdowns in ticket forms.
+      security: []
+      responses:
+        "200":
+          description: Active locations
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  locations:
+                    type: array
+                    items: { $ref: '#/components/schemas/Location' }
+
+  /api/settings/locations:
+    get:
+      summary: List all locations (admin)
+      description: Returns all locations including inactive ones. Requires admin authentication.
+      responses:
+        "200":
+          description: All locations
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  locations:
+                    type: array
+                    items: { $ref: '#/components/schemas/Location' }
+    post:
+      summary: Create a location (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, example: "Adams Elementary School" }
+                sortOrder: { type: integer, example: 0 }
+      responses:
+        "201":
+          description: Location created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  location: { $ref: '#/components/schemas/Location' }
+        "409":
+          description: Name conflict
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/settings/locations/{locationId}:
+    patch:
+      summary: Update a location (admin)
+      parameters:
+        - name: locationId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                isActive: { type: boolean }
+                sortOrder: { type: integer }
+      responses:
+        "200":
+          description: Updated location
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  location: { $ref: '#/components/schemas/Location' }
+        "400":
+          description: Update failed (name conflict or empty name)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+    delete:
+      summary: Delete a location (admin)
+      description: Deletes the location. Returns 409 if the location is referenced by any ticket.
+      parameters:
+        - name: locationId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        "409":
+          description: Location is in use by one or more tickets
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /auth/oidc:
+    get:
+      summary: Initiate OIDC login
+      description: Redirects to the OIDC provider for authentication.
+      security: []
+      responses:
+        "302":
+          description: Redirect to OIDC authorization URL
+
+  /auth/oidc/callback:
+    get:
+      summary: OIDC callback
+      description: Handles the OIDC provider callback, exchanges code for tokens, and sets session cookie.
+      security: []
+      parameters:
+        - name: code
+          in: query
+          schema: { type: string }
+        - name: state
+          in: query
+          schema: { type: string }
+      responses:
+        "302":
+          description: Redirect to client URL with session cookie set
+
+  /api/auth/me:
+    get:
+      summary: Get current authenticated user
+      responses:
+        "200":
+          description: Authenticated user info
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  authenticated: { type: boolean }
+                  user: { $ref: '#/components/schemas/AuthUser' }
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/auth/register:
+    post:
+      summary: Register a local account
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email, password]
+              properties:
+                name: { type: string, minLength: 2 }
+                email: { type: string, format: email }
+                password: { type: string, minLength: 8 }
+      responses:
+        "201":
+          description: Account created and session started
+        "400":
+          description: Validation error
+        "409":
+          description: Email already exists
+
+  /api/auth/local/login:
+    post:
+      summary: Login with local account
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+      responses:
+        "200":
+          description: Login successful
+        "400":
+          description: Invalid email format
+        "401":
+          description: Invalid credentials
+
+  /api/auth/logout:
+    post:
+      summary: Logout (clear session cookie)
+      responses:
+        "204":
+          description: Session cleared
+
+  /api/tickets:
+    get:
+      summary: List tickets for the authenticated user's team
+      responses:
+        "200":
+          description: List of tickets
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tickets:
+                    type: array
+                    items: { $ref: '#/components/schemas/Ticket' }
+        "401":
+          description: Unauthenticated
+    post:
+      summary: Create a new ticket
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, description, priority, teamId, categoryId, requestorName, requestorEmail]
+              properties:
+                id: { type: string }
+                title: { type: string }
+                description: { type: string }
+                priority: { type: string, enum: [Low, Medium, High, Critical] }
+                teamId: { type: string }
+                categoryId: { type: string }
+                assignedToId: { type: string, nullable: true }
+                requestorName: { type: string }
+                requestorEmail: { type: string }
+                location: { type: string }
+      responses:
+        "201":
+          description: Ticket created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ticket: { $ref: '#/components/schemas/Ticket' }
+        "400":
+          description: Invalid input
+        "401":
+          description: Unauthenticated
+        "403":
+          description: Cross-team ticket creation forbidden
+
+  /api/tickets/{ticketId}:
+    get:
+      summary: Get a ticket by ID
+      parameters:
+        - name: ticketId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Ticket details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ticket: { $ref: '#/components/schemas/Ticket' }
+        "404":
+          description: Ticket not found
+    patch:
+      summary: Update a ticket
+      parameters:
+        - name: ticketId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title: { type: string }
+                description: { type: string }
+                status: { type: string, enum: [Open, In Progress, Pending, Resolved, Closed] }
+                priority: { type: string, enum: [Low, Medium, High, Critical] }
+                categoryId: { type: string }
+                assignedToId: { type: string, nullable: true }
+      responses:
+        "200":
+          description: Updated ticket
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ticket: { $ref: '#/components/schemas/Ticket' }
+        "400":
+          description: Invalid input
+        "403":
+          description: Cross-team update forbidden
+    delete:
+      summary: Delete a ticket
+      parameters:
+        - name: ticketId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "204":
+          description: Ticket deleted
+        "403":
+          description: Cross-team delete forbidden
+        "404":
+          description: Ticket not found
+
+  /api/tickets/{ticketId}/comments:
+    post:
+      summary: Add a comment to a ticket
+      parameters:
+        - name: ticketId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message: { type: string }
+      responses:
+        "201":
+          description: Comment added
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  comment: { $ref: '#/components/schemas/ActivityEntry' }
+        "400":
+          description: Invalid payload
+        "403":
+          description: Cross-team comment forbidden
+
+  /api/tickets/{ticketId}/attachments:
+    get:
+      summary: List attachments for a ticket
+      parameters:
+        - name: ticketId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: List of attachments
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  attachments:
+                    type: array
+                    items: { $ref: '#/components/schemas/TicketAttachment' }
+    post:
+      summary: Upload an attachment
+      parameters:
+        - name: ticketId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "201":
+          description: Attachment uploaded
+        "400":
+          description: Missing file or invalid
+
+  /api/tickets/{ticketId}/attachments/{attachmentId}:
+    get:
+      summary: Download an attachment
+      parameters:
+        - name: ticketId
+          in: path
+          required: true
+          schema: { type: string }
+        - name: attachmentId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: File content
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: Attachment not found
+    delete:
+      summary: Delete an attachment (soft delete)
+      parameters:
+        - name: ticketId
+          in: path
+          required: true
+          schema: { type: string }
+        - name: attachmentId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "204":
+          description: Attachment deleted
+        "404":
+          description: Attachment not found
+
+  /api/tickets/activity:
+    get:
+      summary: List all activity for the user's team tickets
+      responses:
+        "200":
+          description: Activity entries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  activity:
+                    type: array
+                    items: { $ref: '#/components/schemas/ActivityEntry' }
+
+  /api/public/tickets:
+    post:
+      summary: Create an anonymous/public ticket
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [teamId, categoryId, title, description, requestorName, requestorEmail]
+              properties:
+                teamId: { type: string }
+                categoryId: { type: string }
+                title: { type: string }
+                description: { type: string }
+                requestorName: { type: string }
+                requestorEmail: { type: string }
+                location: { type: string }
+      responses:
+        "201":
+          description: Public ticket created
+        "400":
+          description: Invalid input
+
+  /api/directory:
+    get:
+      summary: Get full directory (teams, categories, users)
+      responses:
+        "200":
+          description: Directory data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  teams:
+                    type: array
+                    items: { $ref: '#/components/schemas/Team' }
+                  categories:
+                    type: array
+                    items: { $ref: '#/components/schemas/Category' }
+                  users:
+                    type: array
+                    items: { $ref: '#/components/schemas/User' }
+
+  /api/public/directory:
+    get:
+      summary: Get public directory (teams and categories only)
+      security: []
+      responses:
+        "200":
+          description: Public directory data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  teams:
+                    type: array
+                    items: { $ref: '#/components/schemas/Team' }
+                  categories:
+                    type: array
+                    items: { $ref: '#/components/schemas/Category' }
+
+  /api/teams:
+    get:
+      summary: List all teams
+      responses:
+        "200":
+          description: Teams list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  teams:
+                    type: array
+                    items: { $ref: '#/components/schemas/Team' }
+    post:
+      summary: Create a team (Admin only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, code, accent]
+              properties:
+                id: { type: string }
+                name: { type: string }
+                code: { type: string }
+                accent: { type: string }
+      responses:
+        "201":
+          description: Team created
+        "403":
+          description: Admin required
+
+  /api/teams/{teamId}:
+    get:
+      summary: Get a team by ID
+      parameters:
+        - name: teamId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Team details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  team: { $ref: '#/components/schemas/Team' }
+        "404":
+          description: Team not found
+    patch:
+      summary: Update a team (Admin only)
+      parameters:
+        - name: teamId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                code: { type: string }
+                accent: { type: string }
+      responses:
+        "200":
+          description: Team updated
+        "403":
+          description: Admin required
+    delete:
+      summary: Delete a team (Admin only)
+      parameters:
+        - name: teamId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "204":
+          description: Team deleted
+        "403":
+          description: Admin required
+        "404":
+          description: Team not found
+
+  /api/categories:
+    get:
+      summary: List all categories
+      responses:
+        "200":
+          description: Categories list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  categories:
+                    type: array
+                    items: { $ref: '#/components/schemas/Category' }
+    post:
+      summary: Create a category (Admin only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [teamId, name]
+              properties:
+                id: { type: string }
+                teamId: { type: string }
+                name: { type: string }
+                description: { type: string }
+      responses:
+        "201":
+          description: Category created
+        "403":
+          description: Admin required
+
+  /api/categories/{categoryId}:
+    get:
+      summary: Get a category by ID
+      parameters:
+        - name: categoryId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Category details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  category: { $ref: '#/components/schemas/Category' }
+        "404":
+          description: Category not found
+    patch:
+      summary: Update a category (Admin only)
+      parameters:
+        - name: categoryId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                teamId: { type: string }
+                name: { type: string }
+                description: { type: string }
+      responses:
+        "200":
+          description: Category updated
+        "403":
+          description: Admin required
+    delete:
+      summary: Delete a category (Admin only)
+      parameters:
+        - name: categoryId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "204":
+          description: Category deleted
+        "403":
+          description: Admin required
+        "404":
+          description: Category not found
+
+  /api/users:
+    get:
+      summary: List all users
+      responses:
+        "200":
+          description: Users list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  users:
+                    type: array
+                    items: { $ref: '#/components/schemas/User' }
+    post:
+      summary: Create a user (Admin only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email, teamId, role]
+              properties:
+                id: { type: string }
+                name: { type: string }
+                email: { type: string, format: email }
+                teamId: { type: string }
+                role: { type: string, enum: [Admin, Staff] }
+      responses:
+        "201":
+          description: User created
+        "403":
+          description: Admin required
+
+  /api/users/{userId}:
+    get:
+      summary: Get a user by ID
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: User details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user: { $ref: '#/components/schemas/User' }
+        "404":
+          description: User not found
+    patch:
+      summary: Update a user (Admin only)
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                email: { type: string, format: email }
+                teamId: { type: string }
+                role: { type: string, enum: [Admin, Staff] }
+      responses:
+        "200":
+          description: User updated
+        "403":
+          description: Admin required
+    delete:
+      summary: Delete a user (Admin only)
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "204":
+          description: User deleted
+        "403":
+          description: Admin required
+        "404":
+          description: User not found
+
+  /api/dashboard/summary:
+    get:
+      summary: Get dashboard summary statistics
+      responses:
+        "200":
+          description: Dashboard summary
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  summary: { $ref: '#/components/schemas/DashboardSummary' }
+
+  /api/dashboard/trends:
+    get:
+      summary: Get team ticket trends
+      responses:
+        "200":
+          description: Trend data points
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  trends:
+                    type: array
+                    items: { $ref: '#/components/schemas/TrendPoint' }
