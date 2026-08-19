@@ -14,6 +14,7 @@ import {
   authenticateLocalAccountPersisted,
   changeLocalAccountPasswordPersisted,
   registerLocalAccountPersisted,
+  verifyLocalAccountPassword,
 } from '../local-auth.js'
 import {
   listUsers,
@@ -313,6 +314,44 @@ authRouter.post('/test-login', async (req, res) => {
   } catch (error) {
     console.error('Test login session creation failed.', error)
     res.status(500).json({ error: 'test_login_failed' })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Self-service password change (any authenticated user)
+// ---------------------------------------------------------------------------
+
+authRouter.post('/change-password', requireAuth, async (req, res) => {
+  const sessionUser = req.user!
+  const currentPassword = typeof req.body?.currentPassword === 'string' ? req.body.currentPassword : ''
+  const newPassword = typeof req.body?.newPassword === 'string' ? req.body.newPassword : ''
+
+  if (newPassword.length < 8) {
+    res.status(400).json({ error: 'invalid_password', message: 'Password must be at least 8 characters.' })
+    return
+  }
+
+  try {
+    const matches = await verifyLocalAccountPassword(sessionUser.email, currentPassword)
+    if (!matches) {
+      res.status(401).json({ error: 'invalid_current_password', message: 'Current password is incorrect.' })
+      return
+    }
+
+    const result = await changeLocalAccountPasswordPersisted(sessionUser.name, sessionUser.email, newPassword)
+    if ('error' in result) {
+      if (result.error === 'invalid_email' || result.error === 'invalid_name') {
+        res.status(409).json({ error: 'local_account_not_found', message: 'Your password is managed by your organization and cannot be changed here.' })
+        return
+      }
+      res.status(400).json({ error: result.error })
+      return
+    }
+
+    res.json({ ok: true })
+  } catch (error) {
+    console.error('Changing own password failed.', error)
+    res.status(500).json({ error: 'password_change_failed' })
   }
 })
 

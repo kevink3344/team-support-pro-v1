@@ -190,6 +190,16 @@ export const authenticateLocalAccountPersisted = async (
   return authenticateLocalAccount(email, password)
 }
 
+export const verifyLocalAccountPassword = async (
+  email: string,
+  password: string,
+): Promise<boolean> => {
+  await loadLocalAccounts()
+
+  const result = authenticateLocalAccount(email, password)
+  return !('error' in result)
+}
+
 export const upsertLocalAccountPersisted = async (
   name: string,
   email: string,

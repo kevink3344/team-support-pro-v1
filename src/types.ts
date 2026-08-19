@@ -28,6 +28,7 @@ export type AppView =
   | 'reports'
   | 'settings'
   | 'about'
+  | 'change-password'
 
 export type ListViewMode = 'table' | 'cards'
 export type ThemeMode = 'light' | 'dark'

@@ -776,6 +776,12 @@ function App() {
   const notificationsPreviewRef = useRef<HTMLDivElement | null>(null)
   const [profileMenuOpen, setProfileMenuOpen] = useState(false)
   const profileMenuRef = useRef<HTMLDivElement | null>(null)
+  const [selfPasswordCurrent, setSelfPasswordCurrent] = useState('')
+  const [selfPasswordNew, setSelfPasswordNew] = useState('')
+  const [selfPasswordConfirm, setSelfPasswordConfirm] = useState('')
+  const [selfPasswordPending, setSelfPasswordPending] = useState(false)
+  const [selfPasswordError, setSelfPasswordError] = useState('')
+  const [selfPasswordNotice, setSelfPasswordNotice] = useState('')
   const detailResizeStateRef = useRef<{ startX: number; startWidth: number } | null>(null)
   const quickActionToastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -2645,6 +2651,58 @@ function App() {
     setLocalAuthNotice('')
     setDetailTicketId(null)
     setActiveView('dashboard')
+  }
+
+  const submitChangePassword = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setSelfPasswordError('')
+    setSelfPasswordNotice('')
+
+    if (!selfPasswordCurrent) {
+      setSelfPasswordError('Enter your current password.')
+      return
+    }
+    if (selfPasswordNew.length < 8) {
+      setSelfPasswordError('New password must be at least 8 characters.')
+      return
+    }
+    if (selfPasswordNew !== selfPasswordConfirm) {
+      setSelfPasswordError('New passwords do not match.')
+      return
+    }
+
+    setSelfPasswordPending(true)
+    try {
+      const response = await fetch(apiUrl('/api/auth/change-password'), {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          currentPassword: selfPasswordCurrent,
+          newPassword: selfPasswordNew,
+        }),
+      })
+      const payload = (await response.json().catch(() => ({}))) as { error?: string; message?: string }
+      if (!response.ok) {
+        setSelfPasswordError(
+          payload.message ||
+            (payload.error === 'invalid_current_password'
+              ? 'Current password is incorrect.'
+              : payload.error === 'local_account_not_found'
+                ? 'Your password is managed by your organization and cannot be changed here.'
+                : 'Password could not be changed.'),
+        )
+        return
+      }
+      setSelfPasswordCurrent('')
+      setSelfPasswordNew('')
+      setSelfPasswordConfirm('')
+      setSelfPasswordNotice('Password changed successfully.')
+    } catch {
+      setSelfPasswordError('Password could not be changed. Confirm the backend server is running.')
+    } finally {
+      setSelfPasswordPending(false)
+    }
   }
 
   const handleLocalLogin = async (event: FormEvent<HTMLFormElement>) => {
@@ -4780,6 +4838,8 @@ function App() {
         ? 'Categories'
       : activeView === 'about'
         ? 'About'
+      : activeView === 'change-password'
+        ? 'Change Password'
       : visibleNavItems.find((item) => item.id === activeView)?.label ?? 'Settings'
 
   const resetDashboardLayout = () => {
@@ -9595,6 +9655,14 @@ function App() {
                         <button
                           type="button"
                           className="flex w-full items-center gap-2 rounded-[2px] px-2 py-1.5 text-sm text-white/90 hover:bg-white/10 text-left"
+                          onClick={() => { setActiveView('change-password'); setProfileMenuOpen(false) }}
+                        >
+                          <LogOut className="h-4 w-4 shrink-0" />
+                          Change Password
+                        </button>
+                        <button
+                          type="button"
+                          className="flex w-full items-center gap-2 rounded-[2px] px-2 py-1.5 text-sm text-white/90 hover:bg-white/10 text-left"
                           onClick={signOut}
                         >
                           <LogOut className="h-4 w-4 shrink-0" />
@@ -9905,6 +9973,61 @@ function App() {
                 ) : (
                   <div className="text-sm text-[color:var(--text-muted)]">No about page content has been configured yet.</div>
                 )}
+              </div>
+            )}
+
+            {activeView === 'change-password' && (
+              <div className="surface mx-auto max-w-md p-6">
+                <div className="mb-1 text-xl font-semibold">Change Password</div>
+                <div className="mb-4 text-sm text-[color:var(--text-muted)]">
+                  Update the password for {currentUser.email}.
+                </div>
+                <form onSubmit={submitChangePassword} className="flex flex-col gap-4">
+                  <label className="flex flex-col gap-1">
+                    <span className="field-label">Current password</span>
+                    <input
+                      type="password"
+                      className="input-control"
+                      value={selfPasswordCurrent}
+                      onChange={(event) => setSelfPasswordCurrent(event.target.value)}
+                      autoComplete="current-password"
+                      autoFocus
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <span className="field-label">New password</span>
+                    <input
+                      type="password"
+                      className="input-control"
+                      value={selfPasswordNew}
+                      onChange={(event) => setSelfPasswordNew(event.target.value)}
+                      autoComplete="new-password"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <span className="field-label">Confirm new password</span>
+                    <input
+                      type="password"
+                      className="input-control"
+                      value={selfPasswordConfirm}
+                      onChange={(event) => setSelfPasswordConfirm(event.target.value)}
+                      autoComplete="new-password"
+                    />
+                  </label>
+                  {selfPasswordError && (
+                    <div className="text-sm text-rose-600">{selfPasswordError}</div>
+                  )}
+                  {selfPasswordNotice && (
+                    <div className="text-sm text-emerald-600">{selfPasswordNotice}</div>
+                  )}
+                  <button
+                    type="submit"
+                    className="primary-button"
+                    disabled={selfPasswordPending}
+                  >
+                    {selfPasswordPending ? 'Changing…' : 'Change Password'}
+                  </button>
+                </form>
               </div>
             )}
 
