@@ -1007,6 +1007,17 @@ export const initDb = async (): Promise<void> => {
         console.error('TicketVersions DDL failed:', err instanceof Error ? err.message : err)
       }
     }
+    // Older deployments may have TicketVersions tables without CreatedAt — add it if missing
+    for (const ddl of [
+      `IF EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[TicketVersions]') AND type in (N'U')) AND NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[TicketVersions]') AND name = 'CreatedAt') ALTER TABLE [dbo].[TicketVersions] ADD CreatedAt DATETIME2 NOT NULL DEFAULT GETUTCDATE()`,
+      `IF EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[TicketVersionCustomFieldValues]') AND type in (N'U')) AND NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[TicketVersionCustomFieldValues]') AND name = 'CreatedAt') ALTER TABLE [dbo].[TicketVersionCustomFieldValues] ADD CreatedAt DATETIME2 NOT NULL DEFAULT GETUTCDATE()`,
+    ]) {
+      try {
+        await pool.request().query(ddl)
+      } catch (err) {
+        console.warn('TicketVersions CreatedAt backfill failed:', err instanceof Error ? err.message : err)
+      }
+    }
     console.log('Database: SQL Server init complete (schema management is external)')
     return
   }

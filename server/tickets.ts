@@ -461,7 +461,17 @@ export const upsertCustomFieldValues = async (
 }
 
 const getTicketVersionCustomFieldValues = async (db: Client, ticketVersionId: string): Promise<TicketCustomFieldValue[]> => {
-  const rows = await dbAll(db, 'SELECT Id AS id, TicketVersionId AS ticketId, FieldId AS fieldId, FieldLabel AS fieldLabel, FieldType AS fieldType, Value AS value FROM TicketVersionCustomFieldValues WHERE TicketVersionId = ? ORDER BY rowid ASC', [ticketVersionId]) as Array<{ id: unknown; ticketId: unknown; fieldId: unknown; fieldLabel: unknown; fieldType: unknown; value: unknown }>
+  let rows: Array<{ id: unknown; ticketId: unknown; fieldId: unknown; fieldLabel: unknown; fieldType: unknown; value: unknown }>
+  try {
+    rows = await dbAll(db, 'SELECT Id AS id, TicketVersionId AS ticketId, FieldId AS fieldId, FieldLabel AS fieldLabel, FieldType AS fieldType, Value AS value FROM TicketVersionCustomFieldValues WHERE TicketVersionId = ? ORDER BY CreatedAt ASC', [ticketVersionId]) as Array<{ id: unknown; ticketId: unknown; fieldId: unknown; fieldLabel: unknown; fieldType: unknown; value: unknown }>
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    if (/Invalid column name/i.test(msg) && /CreatedAt/i.test(msg)) {
+      rows = await dbAll(db, 'SELECT Id AS id, TicketVersionId AS ticketId, FieldId AS fieldId, FieldLabel AS fieldLabel, FieldType AS fieldType, Value AS value FROM TicketVersionCustomFieldValues WHERE TicketVersionId = ?', [ticketVersionId]) as Array<{ id: unknown; ticketId: unknown; fieldId: unknown; fieldLabel: unknown; fieldType: unknown; value: unknown }>
+    } else {
+      throw err
+    }
+  }
   return rows.map((row) => ({ id: String(row.id), ticketId: String(row.ticketId), fieldId: String(row.fieldId), fieldLabel: String(row.fieldLabel), fieldType: String(row.fieldType), value: String(row.value) }))
 }
 
@@ -480,7 +490,15 @@ const mapTicketVersion = (record: Record<string, unknown>): Omit<TicketVersion, 
   requestorEmail: String(record.requestorEmail),
   location: String(record.location),
   dueLabel: String(record.dueLabel),
-  createdAt: new Date(String(record.createdAt)).toISOString(),
+  createdAt: (() => {
+    const v = record.createdAt
+    if (typeof v === 'string' && v) {
+      const d = new Date(v)
+      if (!Number.isNaN(d.getTime())) return d.toISOString()
+    }
+    if (v instanceof Date && !Number.isNaN((v as Date).getTime())) return (v as Date).toISOString()
+    return new Date().toISOString()
+  })(),
 })
 
 const isMissingTableError = (err: unknown): boolean => {
@@ -538,15 +556,38 @@ export const createTicketVersion = async (db: Client, ticketId: string): Promise
 
 export const listTicketVersions = async (ticketId: string): Promise<TicketVersion[]> => {
   const db = getDb()
+  const isMissingCreatedAtError = (err: unknown): boolean => {
+    const msg = err instanceof Error ? err.message : String(err)
+    return /Invalid column name/i.test(msg) && /CreatedAt/i.test(msg)
+  }
   try {
-    const rows = await dbAll(db, 'SELECT Id AS id, TicketId AS ticketId, VersionNumber AS versionNumber, Title AS title, Description AS description, Status AS status, Priority AS priority, TeamId AS teamId, CategoryId AS categoryId, AssignedToId AS assignedToId, RequestorName AS requestorName, RequestorEmail AS requestorEmail, Location AS location, DueLabel AS dueLabel, CreatedAt AS createdAt FROM TicketVersions WHERE TicketId = ? ORDER BY VersionNumber DESC', [ticketId]) as Array<Record<string, unknown>>
+    let rows: Array<Record<string, unknown>>
+    try {
+      rows = await dbAll(db, 'SELECT Id AS id, TicketId AS ticketId, VersionNumber AS versionNumber, Title AS title, Description AS description, Status AS status, Priority AS priority, TeamId AS teamId, CategoryId AS categoryId, AssignedToId AS assignedToId, RequestorName AS requestorName, RequestorEmail AS requestorEmail, Location AS location, DueLabel AS dueLabel, CreatedAt AS createdAt FROM TicketVersions WHERE TicketId = ? ORDER BY VersionNumber DESC', [ticketId]) as Array<Record<string, unknown>>
+    } catch (err) {
+      if (isMissingCreatedAtError(err)) {
+        console.warn('listTicketVersions: CreatedAt missing, falling back without it')
+        rows = await dbAll(db, 'SELECT Id AS id, TicketId AS ticketId, VersionNumber AS versionNumber, Title AS title, Description AS description, Status AS status, Priority AS priority, TeamId AS teamId, CategoryId AS categoryId, AssignedToId AS assignedToId, RequestorName AS requestorName, RequestorEmail AS requestorEmail, Location AS location, DueLabel AS dueLabel FROM TicketVersions WHERE TicketId = ? ORDER BY VersionNumber DESC', [ticketId]) as Array<Record<string, unknown>>
+      } else {
+        throw err
+      }
+    }
     const versions = rows.map(mapTicketVersion)
 
     const customFieldsByVersion = new Map<string, TicketCustomFieldValue[]>()
     if (versions.length) {
       const versionIds = versions.map((v) => v.id)
       const placeholders = versionIds.map(() => '?').join(',')
-      const cfRows = await dbAll(db, `SELECT Id AS id, TicketVersionId AS ticketVersionId, FieldId AS fieldId, FieldLabel AS fieldLabel, FieldType AS fieldType, Value AS value FROM TicketVersionCustomFieldValues WHERE TicketVersionId IN (${placeholders}) ORDER BY rowid ASC`, versionIds) as Array<{ id: unknown; ticketVersionId: unknown; fieldId: unknown; fieldLabel: unknown; fieldType: unknown; value: unknown }>
+      let cfRows: Array<{ id: unknown; ticketVersionId: unknown; fieldId: unknown; fieldLabel: unknown; fieldType: unknown; value: unknown }>
+      try {
+        cfRows = await dbAll(db, `SELECT Id AS id, TicketVersionId AS ticketVersionId, FieldId AS fieldId, FieldLabel AS fieldLabel, FieldType AS fieldType, Value AS value FROM TicketVersionCustomFieldValues WHERE TicketVersionId IN (${placeholders}) ORDER BY CreatedAt ASC`, versionIds) as Array<{ id: unknown; ticketVersionId: unknown; fieldId: unknown; fieldLabel: unknown; fieldType: unknown; value: unknown }>
+      } catch (err) {
+        if (isMissingCreatedAtError(err)) {
+          cfRows = await dbAll(db, `SELECT Id AS id, TicketVersionId AS ticketVersionId, FieldId AS fieldId, FieldLabel AS fieldLabel, FieldType AS fieldType, Value AS value FROM TicketVersionCustomFieldValues WHERE TicketVersionId IN (${placeholders})`, versionIds) as Array<{ id: unknown; ticketVersionId: unknown; fieldId: unknown; fieldLabel: unknown; fieldType: unknown; value: unknown }>
+        } else {
+          throw err
+        }
+      }
       for (const row of cfRows) {
         const versionId = String(row.ticketVersionId)
         const current = customFieldsByVersion.get(versionId) ?? []
