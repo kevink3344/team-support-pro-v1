@@ -1494,7 +1494,11 @@ function App() {
 
   useEffect(() => {
     setNewTicketForm((current) => {
-      const formTeamId = current.teamId || currentTeam?.id || ''
+      const targetTeamId = currentTeam?.id || ''
+      if (!targetTeamId) {
+        return current
+      }
+      const formTeamId = canViewAllOrgTickets ? (current.teamId || targetTeamId) : targetTeamId
       if (!formTeamId) {
         return current
       }
@@ -1508,7 +1512,7 @@ function App() {
       }
       return { ...current, teamId: formTeamId, categoryId: formTeamCategories[0].id }
     })
-  }, [categories, currentTeam?.id])
+  }, [categories, currentTeam?.id, canViewAllOrgTickets])
 
   useEffect(() => {
     let cancelled = false
