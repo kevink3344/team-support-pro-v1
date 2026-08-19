@@ -963,8 +963,45 @@ const seedSettingsTabs = async (db: Client): Promise<void> => {
 
 export const initDb = async (): Promise<void> => {
   if (serverConfig.db.mode === 'sqlserver') {
-    // SQL Server database is managed externally; skip SQLite schema/seed init
-    await getPool() // validate connection at startup
+    const pool = await getPool() // validate connection at startup
+    // Ensure TicketVersions tables exist (added after initial SQL Server schema)
+    for (const ddl of [
+      `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'TicketVersions')
+       CREATE TABLE TicketVersions (
+        Id NVARCHAR(255) PRIMARY KEY,
+        TicketId NVARCHAR(255) NOT NULL,
+        VersionNumber INT NOT NULL,
+        Title NVARCHAR(MAX) NOT NULL,
+        Description NVARCHAR(MAX) NOT NULL,
+        Status NVARCHAR(50) NOT NULL,
+        Priority NVARCHAR(50) NOT NULL,
+        TeamId NVARCHAR(255) NOT NULL,
+        CategoryId NVARCHAR(255) NOT NULL,
+        AssignedToId NVARCHAR(255),
+        RequestorName NVARCHAR(500) NOT NULL,
+        RequestorEmail NVARCHAR(500) NOT NULL,
+        Location NVARCHAR(500) NOT NULL,
+        DueLabel NVARCHAR(255) NOT NULL,
+        CreatedAt DATETIME2 DEFAULT GETUTCDATE(),
+        CONSTRAINT UQ_TicketVersions_TicketId_VersionNumber UNIQUE (TicketId, VersionNumber)
+       )`,
+      `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'TicketVersionCustomFieldValues')
+       CREATE TABLE TicketVersionCustomFieldValues (
+        Id NVARCHAR(255) PRIMARY KEY,
+        TicketVersionId NVARCHAR(255) NOT NULL,
+        FieldId NVARCHAR(255) NOT NULL,
+        FieldLabel NVARCHAR(500) NOT NULL,
+        FieldType NVARCHAR(50) NOT NULL,
+        Value NVARCHAR(MAX) NOT NULL,
+        CreatedAt DATETIME2 DEFAULT GETUTCDATE()
+       )`,
+    ]) {
+      try {
+        await pool.request().query(ddl)
+      } catch (err) {
+        console.warn('TicketVersions DDL warning:', err instanceof Error ? err.message : err)
+      }
+    }
     console.log('Database: SQL Server init complete (schema management is external)')
     return
   }
