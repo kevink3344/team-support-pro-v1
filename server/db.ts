@@ -965,10 +965,12 @@ export const initDb = async (): Promise<void> => {
   if (serverConfig.db.mode === 'sqlserver') {
     const pool = await getPool() // validate connection at startup
     // Ensure TicketVersions tables exist (added after initial SQL Server schema)
+    // Use BEGIN/END block — bare IF ... CREATE TABLE is not valid T-SQL batch syntax
     for (const ddl of [
-      `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'TicketVersions')
-       CREATE TABLE TicketVersions (
-        Id NVARCHAR(255) PRIMARY KEY,
+      `IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[TicketVersions]') AND type in (N'U'))
+       BEGIN
+       CREATE TABLE [dbo].[TicketVersions] (
+        Id NVARCHAR(255) NOT NULL PRIMARY KEY,
         TicketId NVARCHAR(255) NOT NULL,
         VersionNumber INT NOT NULL,
         Title NVARCHAR(MAX) NOT NULL,
@@ -977,29 +979,32 @@ export const initDb = async (): Promise<void> => {
         Priority NVARCHAR(50) NOT NULL,
         TeamId NVARCHAR(255) NOT NULL,
         CategoryId NVARCHAR(255) NOT NULL,
-        AssignedToId NVARCHAR(255),
+        AssignedToId NVARCHAR(255) NULL,
         RequestorName NVARCHAR(500) NOT NULL,
         RequestorEmail NVARCHAR(500) NOT NULL,
         Location NVARCHAR(500) NOT NULL,
         DueLabel NVARCHAR(255) NOT NULL,
-        CreatedAt DATETIME2 DEFAULT GETUTCDATE(),
+        CreatedAt DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
         CONSTRAINT UQ_TicketVersions_TicketId_VersionNumber UNIQUE (TicketId, VersionNumber)
-       )`,
-      `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'TicketVersionCustomFieldValues')
-       CREATE TABLE TicketVersionCustomFieldValues (
-        Id NVARCHAR(255) PRIMARY KEY,
+       );
+       END`,
+      `IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[TicketVersionCustomFieldValues]') AND type in (N'U'))
+       BEGIN
+       CREATE TABLE [dbo].[TicketVersionCustomFieldValues] (
+        Id NVARCHAR(255) NOT NULL PRIMARY KEY,
         TicketVersionId NVARCHAR(255) NOT NULL,
         FieldId NVARCHAR(255) NOT NULL,
         FieldLabel NVARCHAR(500) NOT NULL,
         FieldType NVARCHAR(50) NOT NULL,
         Value NVARCHAR(MAX) NOT NULL,
-        CreatedAt DATETIME2 DEFAULT GETUTCDATE()
-       )`,
+        CreatedAt DATETIME2 NOT NULL DEFAULT GETUTCDATE()
+       );
+       END`,
     ]) {
       try {
         await pool.request().query(ddl)
       } catch (err) {
-        console.warn('TicketVersions DDL warning:', err instanceof Error ? err.message : err)
+        console.error('TicketVersions DDL failed:', err instanceof Error ? err.message : err)
       }
     }
     console.log('Database: SQL Server init complete (schema management is external)')

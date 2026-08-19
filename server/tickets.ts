@@ -483,65 +483,86 @@ const mapTicketVersion = (record: Record<string, unknown>): Omit<TicketVersion, 
   createdAt: new Date(String(record.createdAt)).toISOString(),
 })
 
+const isMissingTableError = (err: unknown): boolean => {
+  const msg = err instanceof Error ? err.message : String(err)
+  return /Invalid object name/i.test(msg) || /does not exist/i.test(msg) || /no such table/i.test(msg)
+}
+
 export const createTicketVersion = async (db: Client, ticketId: string): Promise<number> => {
-  const ticketRow = await dbGet(db, `SELECT Id AS id, Title AS title, Description AS description, Status AS status, Priority AS priority, TeamId AS teamId, CategoryId AS categoryId, AssignedToId AS assignedToId, RequestorName AS requestorName, RequestorEmail AS requestorEmail, Location AS location, DueLabel AS dueLabel FROM Tickets WHERE Id = ?`, [ticketId])
-  if (!ticketRow) throw new Error('ticket_not_found')
+  try {
+    const ticketRow = await dbGet(db, `SELECT Id AS id, Title AS title, Description AS description, Status AS status, Priority AS priority, TeamId AS teamId, CategoryId AS categoryId, AssignedToId AS assignedToId, RequestorName AS requestorName, RequestorEmail AS requestorEmail, Location AS location, DueLabel AS dueLabel FROM Tickets WHERE Id = ?`, [ticketId])
+    if (!ticketRow) throw new Error('ticket_not_found')
 
-  const versionNumberRow = await dbGet(db, 'SELECT COALESCE(MAX(VersionNumber), 0) + 1 AS nextVersion FROM TicketVersions WHERE TicketId = ?', [ticketId])
-  const versionNumber = Number(versionNumberRow?.nextVersion ?? 1)
-  const versionId = `tv-${crypto.randomUUID()}`
+    const versionNumberRow = await dbGet(db, 'SELECT COALESCE(MAX(VersionNumber), 0) + 1 AS nextVersion FROM TicketVersions WHERE TicketId = ?', [ticketId])
+    const versionNumber = Number(versionNumberRow?.nextVersion ?? 1)
+    const versionId = `tv-${crypto.randomUUID()}`
 
-  const customFields = await getCustomFieldValues(db, ticketId)
+    const customFields = await getCustomFieldValues(db, ticketId)
 
-  const statements: Array<{ sql: string; args: import('@libsql/client').InValue[] }> = [
-    {
-      sql: `INSERT INTO TicketVersions (Id, TicketId, VersionNumber, Title, Description, Status, Priority, TeamId, CategoryId, AssignedToId, RequestorName, RequestorEmail, Location, DueLabel) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      args: [
-        versionId,
-        ticketId,
-        versionNumber,
-        String(ticketRow.title),
-        String(ticketRow.description),
-        String(ticketRow.status),
-        String(ticketRow.priority),
-        String(ticketRow.teamId),
-        String(ticketRow.categoryId),
-        typeof ticketRow.assignedToId === 'string' ? ticketRow.assignedToId : null,
-        String(ticketRow.requestorName),
-        String(ticketRow.requestorEmail),
-        String(ticketRow.location),
-        String(ticketRow.dueLabel),
-      ],
-    },
-    ...customFields.map((cf) => ({
-      sql: 'INSERT INTO TicketVersionCustomFieldValues (Id, TicketVersionId, FieldId, FieldLabel, FieldType, Value) VALUES (?, ?, ?, ?, ?, ?)',
-      args: [`tvcfv-${crypto.randomUUID()}`, versionId, cf.fieldId, cf.fieldLabel, cf.fieldType, cf.value],
-    })),
-  ]
+    const statements: Array<{ sql: string; args: import('@libsql/client').InValue[] }> = [
+      {
+        sql: `INSERT INTO TicketVersions (Id, TicketId, VersionNumber, Title, Description, Status, Priority, TeamId, CategoryId, AssignedToId, RequestorName, RequestorEmail, Location, DueLabel) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        args: [
+          versionId,
+          ticketId,
+          versionNumber,
+          String(ticketRow.title),
+          String(ticketRow.description),
+          String(ticketRow.status),
+          String(ticketRow.priority),
+          String(ticketRow.teamId),
+          String(ticketRow.categoryId),
+          typeof ticketRow.assignedToId === 'string' ? ticketRow.assignedToId : null,
+          String(ticketRow.requestorName),
+          String(ticketRow.requestorEmail),
+          String(ticketRow.location),
+          String(ticketRow.dueLabel),
+        ],
+      },
+      ...customFields.map((cf) => ({
+        sql: 'INSERT INTO TicketVersionCustomFieldValues (Id, TicketVersionId, FieldId, FieldLabel, FieldType, Value) VALUES (?, ?, ?, ?, ?, ?)',
+        args: [`tvcfv-${crypto.randomUUID()}`, versionId, cf.fieldId, cf.fieldLabel, cf.fieldType, cf.value],
+      })),
+    ]
 
-  await db.batch(statements, 'write')
-  return versionNumber
+    await db.batch(statements, 'write')
+    return versionNumber
+  } catch (err) {
+    if (isMissingTableError(err)) {
+      console.warn('createTicketVersion: TicketVersions table missing, skipping version snapshot:', err instanceof Error ? err.message : err)
+      return 0
+    }
+    throw err
+  }
 }
 
 export const listTicketVersions = async (ticketId: string): Promise<TicketVersion[]> => {
   const db = getDb()
-  const rows = await dbAll(db, 'SELECT Id AS id, TicketId AS ticketId, VersionNumber AS versionNumber, Title AS title, Description AS description, Status AS status, Priority AS priority, TeamId AS teamId, CategoryId AS categoryId, AssignedToId AS assignedToId, RequestorName AS requestorName, RequestorEmail AS requestorEmail, Location AS location, DueLabel AS dueLabel, CreatedAt AS createdAt FROM TicketVersions WHERE TicketId = ? ORDER BY VersionNumber DESC', [ticketId]) as Array<Record<string, unknown>>
-  const versions = rows.map(mapTicketVersion)
+  try {
+    const rows = await dbAll(db, 'SELECT Id AS id, TicketId AS ticketId, VersionNumber AS versionNumber, Title AS title, Description AS description, Status AS status, Priority AS priority, TeamId AS teamId, CategoryId AS categoryId, AssignedToId AS assignedToId, RequestorName AS requestorName, RequestorEmail AS requestorEmail, Location AS location, DueLabel AS dueLabel, CreatedAt AS createdAt FROM TicketVersions WHERE TicketId = ? ORDER BY VersionNumber DESC', [ticketId]) as Array<Record<string, unknown>>
+    const versions = rows.map(mapTicketVersion)
 
-  const customFieldsByVersion = new Map<string, TicketCustomFieldValue[]>()
-  if (versions.length) {
-    const versionIds = versions.map((v) => v.id)
-    const placeholders = versionIds.map(() => '?').join(',')
-    const cfRows = await dbAll(db, `SELECT Id AS id, TicketVersionId AS ticketVersionId, FieldId AS fieldId, FieldLabel AS fieldLabel, FieldType AS fieldType, Value AS value FROM TicketVersionCustomFieldValues WHERE TicketVersionId IN (${placeholders}) ORDER BY rowid ASC`, versionIds) as Array<{ id: unknown; ticketVersionId: unknown; fieldId: unknown; fieldLabel: unknown; fieldType: unknown; value: unknown }>
-    for (const row of cfRows) {
-      const versionId = String(row.ticketVersionId)
-      const current = customFieldsByVersion.get(versionId) ?? []
-      current.push({ id: String(row.id), ticketId: String(row.ticketVersionId), fieldId: String(row.fieldId), fieldLabel: String(row.fieldLabel), fieldType: String(row.fieldType), value: String(row.value) })
-      customFieldsByVersion.set(versionId, current)
+    const customFieldsByVersion = new Map<string, TicketCustomFieldValue[]>()
+    if (versions.length) {
+      const versionIds = versions.map((v) => v.id)
+      const placeholders = versionIds.map(() => '?').join(',')
+      const cfRows = await dbAll(db, `SELECT Id AS id, TicketVersionId AS ticketVersionId, FieldId AS fieldId, FieldLabel AS fieldLabel, FieldType AS fieldType, Value AS value FROM TicketVersionCustomFieldValues WHERE TicketVersionId IN (${placeholders}) ORDER BY rowid ASC`, versionIds) as Array<{ id: unknown; ticketVersionId: unknown; fieldId: unknown; fieldLabel: unknown; fieldType: unknown; value: unknown }>
+      for (const row of cfRows) {
+        const versionId = String(row.ticketVersionId)
+        const current = customFieldsByVersion.get(versionId) ?? []
+        current.push({ id: String(row.id), ticketId: String(row.ticketVersionId), fieldId: String(row.fieldId), fieldLabel: String(row.fieldLabel), fieldType: String(row.fieldType), value: String(row.value) })
+        customFieldsByVersion.set(versionId, current)
+      }
     }
-  }
 
-  return versions.map((v) => ({ ...v, customFields: customFieldsByVersion.get(v.id) ?? [] }))
+    return versions.map((v) => ({ ...v, customFields: customFieldsByVersion.get(v.id) ?? [] }))
+  } catch (err) {
+    if (isMissingTableError(err)) {
+      console.warn('listTicketVersions: TicketVersions table missing, returning empty:', err instanceof Error ? err.message : err)
+      return []
+    }
+    throw err
+  }
 }
 
 export const revertTicketToVersion = async (ticketId: string, versionId: string, actor: string): Promise<TicketRecord | null> => {
