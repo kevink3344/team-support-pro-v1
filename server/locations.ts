@@ -14,7 +14,11 @@ export interface LocationRecord {
 const mapRow = (row: Record<string, unknown>): LocationRecord => ({
   id: String(row.id),
   name: String(row.name),
-  isActive: row.isActive === 1 || row.isActive === true,
+  isActive:
+    row.isActive === 1 ||
+    row.isActive === true ||
+    row.isActive === '1' ||
+    row.isActive === 'true',
   sortOrder: Number(row.sortOrder) || 0,
   createdAt: String(row.createdAt),
   updatedAt: String(row.updatedAt),

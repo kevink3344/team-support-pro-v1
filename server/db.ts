@@ -699,6 +699,10 @@ const runMigrations = async (db: Client) => {
           ) WHERE OrganizationId IS NULL OR trim(OrganizationId) = ''`,
     args: [fallback.id],
   })
+
+  // Locations should be active by default. Normalize any existing rows that
+  // were seeded or migrated with IsActive = 0 back to active.
+  await db.execute(`UPDATE Locations SET IsActive = 1 WHERE IsActive != 1`)
 }
 
 const backfillDefaultLayouts = async (db: Client): Promise<void> => {
