@@ -5039,12 +5039,6 @@ function App() {
           </div>
           <div className="surface-muted p-3">
             <div className="mb-1 font-semibold text-[color:var(--text)]">
-              Future integrations
-            </div>
-            Mock data is active today. The state model is ready to swap to hosted services and Azure SQL later.
-          </div>
-          <div className="surface-muted p-3">
-            <div className="mb-1 font-semibold text-[color:var(--text)]">
               Team workload
             </div>
             <div className="space-y-2">
