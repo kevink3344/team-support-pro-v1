@@ -131,6 +131,26 @@ const normalizeRow = (row: Record<string, unknown>): Record<string, unknown> => 
   return normalized
 }
 
+const splitValuesList = (valuesStr: string): string[] => {
+  const result: string[] = []
+  let current = ''
+  let depth = 0
+  let inSingle = false
+  let inDouble = false
+  for (let i = 0; i < valuesStr.length; i++) {
+    const ch = valuesStr[i]
+    if (ch === "'" && !inDouble) { inSingle = !inSingle; current += ch; continue }
+    if (ch === '"' && !inSingle) { inDouble = !inDouble; current += ch; continue }
+    if (inSingle || inDouble) { current += ch; continue }
+    if (ch === '(') { depth++; current += ch; continue }
+    if (ch === ')') { depth--; current += ch; continue }
+    if (ch === ',' && depth === 0) { result.push(current.trim()); current = ''; continue }
+    current += ch
+  }
+  if (current.trim()) result.push(current.trim())
+  return result
+}
+
 const isDuplicateKeyError = (err: unknown): boolean => {
   const msg = err instanceof Error ? err.message : String(err)
   return msg.includes('2627') || msg.includes('2601') || /duplicate/i.test(msg) || /already exists/i.test(msg)
@@ -184,15 +204,30 @@ const runMssql = async (query: string, args: InValue[] = []): Promise<sql.IResul
 }
 
 const runUpsert = async (query: string, args: InValue[], match: RegExpMatchArray): Promise<sql.IResult<unknown>> => {
-  const insertMatch = query.match(/INSERT\s+INTO\s+(\S+)\s*\(([^)]+)\)\s*VALUES\s*\(([^)]+)\)/i)
+  const insertMatch = query.match(/INSERT\s+INTO\s+(\S+)\s*\(([^)]+)\)\s*VALUES\s*\(([\s\S]+?)\)\s*ON\s+CONFLICT/i)
   if (!insertMatch) {
     const fallback = query.replace(/ON\s+CONFLICT[^;]*/gi, '')
     return runMssql(fallback, args)
   }
   const table = insertMatch[1].replace(/["`\[\]]/g, '')
   const columns = insertMatch[2].split(',').map((c) => c.trim().replace(/["`\[\]]/g, ''))
+  const rawValues = splitValuesList(insertMatch[3])
   const conflictCols = match[1].split(',').map((c) => c.trim().replace(/["`\[\]]/g, '')).filter(Boolean)
   const setClause = match[2].trim()
+  // Map column name -> param index (1-based) based on which VALUES entries are "?"
+  const colToParam = new Map<string, number>()
+  let paramCounter = 1
+  for (let i = 0; i < columns.length; i++) {
+    const rv = rawValues[i] ?? '?'
+    if (rv === '?') {
+      colToParam.set(columns[i].toLowerCase(), paramCounter++)
+    } else if (rv.includes('?')) {
+      // Fallback: count ? in value
+      const qCount = (rv.match(/\?/g) || []).length
+      colToParam.set(columns[i].toLowerCase(), paramCounter)
+      paramCounter += qCount
+    }
+  }
   const setPairs = setClause.split(',').map((s) => s.trim())
   const translatedSets: string[] = []
   for (const pair of setPairs) {
@@ -203,9 +238,13 @@ const runUpsert = async (query: string, args: InValue[], match: RegExpMatchArray
     const excludedMatch = val.match(/excluded\.(\S+)/i)
     if (excludedMatch) {
       const excludedCol = excludedMatch[1].replace(/["`\[\]]/g, '')
-      const colIdx = columns.findIndex((c) => c.toLowerCase() === excludedCol.toLowerCase())
-      if (colIdx !== -1) translatedSets.push(`${col} = @p${colIdx + 1}`)
-      else translatedSets.push(`${col} = ${val}`)
+      const pIdx = colToParam.get(excludedCol.toLowerCase())
+      if (pIdx !== undefined) translatedSets.push(`${col} = @p${pIdx}`)
+      else {
+        const colIdx = columns.findIndex((c) => c.toLowerCase() === excludedCol.toLowerCase())
+        if (colIdx !== -1) translatedSets.push(`${col} = @p${colIdx + 1}`)
+        else translatedSets.push(`${col} = ${val}`)
+      }
     } else if (val.toLowerCase().includes("datetime('now')") || val.toLowerCase().includes('getutcdate')) {
       translatedSets.push(`${col} = GETUTCDATE()`)
     } else {
@@ -222,12 +261,28 @@ const runUpsert = async (query: string, args: InValue[], match: RegExpMatchArray
     return `${bracket(col)} = ${val}`
   })
   const conflictConditions = conflictCols.map((col) => {
+    const pIdx = colToParam.get(col.toLowerCase())
+    if (pIdx !== undefined) return `${bracket(col)} = @p${pIdx}`
     const idx = columns.findIndex((c) => c.toLowerCase() === col.toLowerCase())
     const param = idx !== -1 ? `@p${idx + 1}` : `'unknown'`
     return `${bracket(col)} = ${param}`
   }).join(' AND ')
   const whereClause = conflictConditions || '1=0'
-  const updateSql = `IF EXISTS (SELECT 1 FROM ${table} WHERE ${whereClause}) UPDATE ${table} SET ${bracketedSets.join(', ')} WHERE ${whereClause} ELSE INSERT INTO ${table} (${bracketedColumns.join(', ')}) VALUES (${columns.map((_, i) => `@p${i + 1}`).join(', ')})`
+  const insertValuesSql = rawValues.map((rv, i) => {
+    if (rv === '?') {
+      const pIdx = colToParam.get(columns[i].toLowerCase())
+      return pIdx !== undefined ? `@p${pIdx}` : rv
+    }
+    if (rv.toLowerCase().includes("datetime('now')")) return 'GETUTCDATE()'
+    if (rv.includes('?')) {
+      // Replace ? with correct param (should not happen for this codebase)
+      let out = rv
+      for (const [, pIdx] of colToParam) out = out.replace('?', `@p${pIdx}`)
+      return out
+    }
+    return rv
+  }).join(', ')
+  const updateSql = `IF EXISTS (SELECT 1 FROM ${table} WHERE ${whereClause}) UPDATE ${table} SET ${bracketedSets.join(', ')} WHERE ${whereClause} ELSE INSERT INTO ${table} (${bracketedColumns.join(', ')}) VALUES (${insertValuesSql})`
   const translated = translateSql(updateSql)
   const pool = await getPool()
   const req = pool.request()
