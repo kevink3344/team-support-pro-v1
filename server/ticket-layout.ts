@@ -188,6 +188,21 @@ export const saveTicketLayout = async (
   return { layout: normalized, errors }
 }
 
+const parseCreatedAt = (value: unknown): string => {
+  if (typeof value === 'string' && value) {
+    const direct = new Date(value)
+    if (!Number.isNaN(direct.getTime())) return direct.toISOString()
+    // SQL Server nvarchar(getdate()) produces "Aug 21 2026  1:51PM" which
+    // Node's Date cannot parse directly (missing space before AM/PM and
+    // double-space). Normalize and retry.
+    const normalized = value.replace(/(\d)(AM|PM)/i, '$1 $2').replace(/\s+/g, ' ').trim()
+    const retry = new Date(normalized)
+    if (!Number.isNaN(retry.getTime())) return retry.toISOString()
+  }
+  if (value instanceof Date && !Number.isNaN((value as Date).getTime())) return (value as Date).toISOString()
+  return new Date().toISOString()
+}
+
 const mapLayoutVersion = (record: Record<string, unknown>): TicketLayoutVersion => {
   const parsed = (() => {
     try {
@@ -202,7 +217,7 @@ const mapLayoutVersion = (record: Record<string, unknown>): TicketLayoutVersion 
     versionNumber: Number(record.versionNumber),
     layout: parsed as TicketLayout,
     description: typeof record.description === 'string' ? record.description : '',
-    createdAt: new Date(String(record.createdAt)).toISOString(),
+    createdAt: parseCreatedAt(record.createdAt),
   }
 }
 

@@ -441,7 +441,7 @@ ticketsRouter.get('/:ticketId/attachments/:attachmentId', requireAuth, async (re
   }
 })
 
-ticketsRouter.delete('/:ticketId/attachments/:attachmentId', requireAuth, async (req, res) => {
+ticketsRouter.delete('/:ticketId/attachments/:attachmentId', requireAdmin, async (req, res) => {
   const user = req.user!
   const ticketId = typeof req.params.ticketId === 'string' ? req.params.ticketId : ''
   const attachmentId = typeof req.params.attachmentId === 'string' ? req.params.attachmentId : ''

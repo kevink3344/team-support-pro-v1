@@ -8979,8 +8979,12 @@ function App() {
       const disableInProgress = isPending || ticket.status === 'In Progress'
       const disableResolve = isPending
       const isResolved = ticket.status === 'Resolved'
+      const isUnassigned = !ticket.assignedToId || !getUserById(ticket.assignedToId)
       const showAssignAction =
-        !isResolved && activeView !== 'my-tickets' && ticket.assignedToId !== currentUser.id
+        !isResolved &&
+        activeView !== 'my-tickets' &&
+        ticket.assignedToId !== currentUser.id &&
+        (activeView !== 'team-tickets' || isUnassigned)
       const showInProgressAction = !isResolved && ticket.status !== 'In Progress'
       const showResolveAction = !isResolved
 
@@ -10553,15 +10557,17 @@ function App() {
                                   <Download className="h-4 w-4" />
                                   Download
                                 </button>
-                                <button
-                                  type="button"
-                                  className="secondary-button"
-                                  onClick={() => removeAttachment(attachment.id)}
-                                  disabled={attachmentDeletePendingId === attachment.id}
-                                >
-                                  <Trash2 className="h-4 w-4" />
-                                  {attachmentDeletePendingId === attachment.id ? 'Removing...' : 'Remove'}
-                                </button>
+                                {(currentUser.role === 'Admin' || currentUser.role === 'Super Admin') && (
+                                  <button
+                                    type="button"
+                                    className="secondary-button"
+                                    onClick={() => removeAttachment(attachment.id)}
+                                    disabled={attachmentDeletePendingId === attachment.id}
+                                  >
+                                    <Trash2 className="h-4 w-4" />
+                                    {attachmentDeletePendingId === attachment.id ? 'Removing...' : 'Remove'}
+                                  </button>
+                                )}
                               </div>
                             </div>
                           ))
