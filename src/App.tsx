@@ -4620,6 +4620,7 @@ function App() {
 
       const payload = (await response.json()) as {
         user?: User
+        warning?: string
       }
 
       if (!payload.user) {
@@ -4636,7 +4637,17 @@ function App() {
         role: 'Staff',
         canViewAllOrgTickets: false,
       })
-      setUserDirectoryNotice('User added successfully.')
+      if (payload.warning === 'default_password_not_configured') {
+        setUserDirectoryNotice('User added but default password was not set — set it via Change Password.')
+      } else if (payload.warning === 'local_account_failed') {
+        setUserDirectoryNotice('User added but default password could not be set — set it via Change Password.')
+      } else {
+        setUserDirectoryNotice(
+          payload.warning === 'local_account_exists'
+            ? 'User added successfully. Existing login password was preserved.'
+            : 'User added successfully.',
+        )
+      }
       await refreshAuthSession()
     } catch {
       setUserDirectoryError('User could not be created. Confirm the backend server is running.')

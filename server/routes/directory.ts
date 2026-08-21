@@ -42,6 +42,8 @@ import {
   deleteTicketLayoutVersion,
   type TicketLayout,
 } from '../ticket-layout.js'
+import { registerLocalAccountPersisted } from '../local-auth.js'
+import { serverConfig } from '../config.js'
 
 export const directoryRouter = Router()
 
@@ -446,7 +448,25 @@ directoryRouter.post('/users', requireAdmin, async (req, res) => {
       return
     }
 
-    res.status(201).json({ user: createdUser })
+    let warning: string | undefined
+    const defaultPassword = serverConfig.defaultPassword
+    if (!defaultPassword) {
+      console.warn('DEFAULT_PASSWORD not set — user created without local auth account:', createdUser.email)
+      warning = 'default_password_not_configured'
+    } else {
+      const result = await registerLocalAccountPersisted(createdUser.name, createdUser.email, defaultPassword)
+      if ('error' in result) {
+        if (result.error === 'email_exists') {
+          console.warn('Local account already exists for', createdUser.email, '— leaving existing password')
+          warning = 'local_account_exists'
+        } else {
+          console.error('Failed to create local account for', createdUser.email, result.error)
+          warning = 'local_account_failed'
+        }
+      }
+    }
+
+    res.status(201).json({ user: createdUser, ...(warning ? { warning } : {}) })
   } catch (error) {
     console.error('Creating user failed.', error)
     res.status(500).json({ error: 'user_create_failed' })

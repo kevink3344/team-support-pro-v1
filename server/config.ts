@@ -41,6 +41,10 @@ const envSchema = z.object({
   LOCAL_ADMIN_NAME: z.string().optional(),
   LOCAL_ADMIN_EMAIL: z.string().email().optional(),
   LOCAL_ADMIN_PASSWORD: z.string().min(8).optional(),
+  DEFAULT_PASSWORD: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.string().min(8).optional(),
+  ),
   AUTH_USER_LOOKUP_QUERY: z.string().optional(),
   AUTH_FALLBACK_ORGANIZATION_ID: z.string().default('legacy-default'),
   AUTH_FALLBACK_ORGANIZATION_NAME: z.string().default('Legacy Default'),
@@ -111,6 +115,7 @@ export const serverConfig = {
     email: parsed.LOCAL_ADMIN_EMAIL?.trim().toLowerCase() || '',
     password: parsed.LOCAL_ADMIN_PASSWORD || '',
   },
+  defaultPassword: parsed.DEFAULT_PASSWORD?.trim() || '',
   authUserLookupQuery: parsed.AUTH_USER_LOOKUP_QUERY || '',
   fallbackOrganization: {
     id: parsed.AUTH_FALLBACK_ORGANIZATION_ID,
