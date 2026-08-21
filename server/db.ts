@@ -191,7 +191,7 @@ const runUpsert = async (query: string, args: InValue[], match: RegExpMatchArray
   }
   const table = insertMatch[1].replace(/["`\[\]]/g, '')
   const columns = insertMatch[2].split(',').map((c) => c.trim().replace(/["`\[\]]/g, ''))
-  const conflictCol = match[1].trim().replace(/["`\[\]]/g, '')
+  const conflictCols = match[1].split(',').map((c) => c.trim().replace(/["`\[\]]/g, '')).filter(Boolean)
   const setClause = match[2].trim()
   const setPairs = setClause.split(',').map((s) => s.trim())
   const translatedSets: string[] = []
@@ -212,10 +212,7 @@ const runUpsert = async (query: string, args: InValue[], match: RegExpMatchArray
       translatedSets.push(`${col} = ${val}`)
     }
   }
-  const conflictIdx = columns.findIndex((c) => c.toLowerCase() === conflictCol.toLowerCase())
-  const conflictParam = conflictIdx !== -1 ? `@p${conflictIdx + 1}` : `'unknown'`
   const bracket = (col: string) => col.toLowerCase() === 'key' ? `[${col}]` : col
-  const bracketedConflictCol = bracket(conflictCol)
   const bracketedColumns = columns.map(bracket)
   const bracketedSets = translatedSets.map((s) => {
     const eqIdx = s.indexOf('=')
@@ -224,7 +221,13 @@ const runUpsert = async (query: string, args: InValue[], match: RegExpMatchArray
     const val = s.substring(eqIdx + 1).trim()
     return `${bracket(col)} = ${val}`
   })
-  const updateSql = `IF EXISTS (SELECT 1 FROM ${table} WHERE ${bracketedConflictCol} = ${conflictParam}) UPDATE ${table} SET ${bracketedSets.join(', ')} WHERE ${bracketedConflictCol} = ${conflictParam} ELSE INSERT INTO ${table} (${bracketedColumns.join(', ')}) VALUES (${columns.map((_, i) => `@p${i + 1}`).join(', ')})`
+  const conflictConditions = conflictCols.map((col) => {
+    const idx = columns.findIndex((c) => c.toLowerCase() === col.toLowerCase())
+    const param = idx !== -1 ? `@p${idx + 1}` : `'unknown'`
+    return `${bracket(col)} = ${param}`
+  }).join(' AND ')
+  const whereClause = conflictConditions || '1=0'
+  const updateSql = `IF EXISTS (SELECT 1 FROM ${table} WHERE ${whereClause}) UPDATE ${table} SET ${bracketedSets.join(', ')} WHERE ${whereClause} ELSE INSERT INTO ${table} (${bracketedColumns.join(', ')}) VALUES (${columns.map((_, i) => `@p${i + 1}`).join(', ')})`
   const translated = translateSql(updateSql)
   const pool = await getPool()
   const req = pool.request()
@@ -249,25 +252,39 @@ const runInsertOrIgnore = async (query: string, args: InValue[]): Promise<sql.IR
   }
   const table = insertMatch[1].replace(/["`\[\]]/g, '')
   const columns = insertMatch[2].split(',').map((c) => c.trim().replace(/["`\[\]]/g, ''))
-  const conflictCol = conflictMatch[1].trim().replace(/["`\[\]]/g, '')
-  const conflictIdx = columns.findIndex((c) => c.toLowerCase() === conflictCol.toLowerCase())
+  const conflictCols = conflictMatch[1].split(',').map((c) => c.trim().replace(/["`\[\]]/g, '')).filter(Boolean)
   const bracket = (col: string) => col.toLowerCase() === 'key' ? `[${col}]` : col
-  const bracketedConflictCol = bracket(conflictCol)
   const baseInsert = query.replace(/ON\s+CONFLICT[^;]*/gi, '').trim()
   const translated = translateSql(baseInsert)
   const mssqlSql = toMssqlSql(translated)
   let guardedSql: string
-  if (conflictIdx !== -1 && args.length > conflictIdx) {
-    const conflictParam = `@p${conflictIdx + 1}`
-    guardedSql = `IF NOT EXISTS (SELECT 1 FROM ${table} WHERE ${bracketedConflictCol} = ${conflictParam}) ${mssqlSql}`
-  } else if (conflictIdx !== -1) {
-    // No param supplied — extract literal value from VALUES clause
-    const rawValues = insertMatch[3].split(',').map((v) => v.trim())
-    let conflictLiteral = rawValues[conflictIdx] ?? `'unknown'`
-    conflictLiteral = conflictLiteral.replace(/datetime\s*\(\s*'now'\s*\)/gi, 'GETUTCDATE()')
-    guardedSql = `IF NOT EXISTS (SELECT 1 FROM ${table} WHERE ${bracketedConflictCol} = ${conflictLiteral}) ${mssqlSql}`
+  if (conflictCols.length > 0 && conflictCols.every((col) => columns.findIndex((c) => c.toLowerCase() === col.toLowerCase()) !== -1)) {
+    const conditions = conflictCols.map((col) => {
+      const idx = columns.findIndex((c) => c.toLowerCase() === col.toLowerCase())
+      if (idx !== -1 && args.length > idx) return `${bracket(col)} = @p${idx + 1}`
+      if (idx !== -1) {
+        const rawValues = insertMatch[3].split(',').map((v) => v.trim())
+        let lit = rawValues[idx] ?? `'unknown'`
+        lit = lit.replace(/datetime\s*\(\s*'now'\s*\)/gi, 'GETUTCDATE()')
+        return `${bracket(col)} = ${lit}`
+      }
+      return `${bracket(col)} = 'unknown'`
+    }).join(' AND ')
+    guardedSql = `IF NOT EXISTS (SELECT 1 FROM ${table} WHERE ${conditions}) ${mssqlSql}`
   } else {
-    guardedSql = mssqlSql
+    const conflictCol = conflictCols[0] ?? ''
+    const conflictIdx = columns.findIndex((c) => c.toLowerCase() === conflictCol.toLowerCase())
+    if (conflictIdx !== -1 && args.length > conflictIdx) {
+      const conflictParam = `@p${conflictIdx + 1}`
+      guardedSql = `IF NOT EXISTS (SELECT 1 FROM ${table} WHERE ${bracket(conflictCol)} = ${conflictParam}) ${mssqlSql}`
+    } else if (conflictIdx !== -1) {
+      const rawValues = insertMatch[3].split(',').map((v) => v.trim())
+      let conflictLiteral = rawValues[conflictIdx] ?? `'unknown'`
+      conflictLiteral = conflictLiteral.replace(/datetime\s*\(\s*'now'\s*\)/gi, 'GETUTCDATE()')
+      guardedSql = `IF NOT EXISTS (SELECT 1 FROM ${table} WHERE ${bracket(conflictCol)} = ${conflictLiteral}) ${mssqlSql}`
+    } else {
+      guardedSql = mssqlSql
+    }
   }
   const pool = await getPool()
   const req = pool.request()
