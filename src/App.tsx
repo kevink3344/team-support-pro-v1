@@ -9225,11 +9225,6 @@ function App() {
       </nav>
 
       <div className="border-t border-white/10 p-3">
-        {!collapsed && (
-          <div className="mb-3 rounded-[2px] border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] uppercase tracking-[0.14em] text-white/55">
-            Version {appConfig.appVersion}
-          </div>
-        )}
         <div className="flex items-center gap-3 rounded-[2px] border border-white/10 bg-white/5 px-3 py-3">
           <div className="flex h-8 w-8 items-center justify-center rounded-[2px] bg-[color:var(--accent)] text-sm font-semibold">
             {currentUser.name
@@ -9245,6 +9240,11 @@ function App() {
             </div>
           )}
         </div>
+        {!collapsed && (
+          <div className="mt-3 rounded-[2px] border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] uppercase tracking-[0.14em] text-white/55">
+            Version {appConfig.appVersion}
+          </div>
+        )}
       </div>
     </>
   )
