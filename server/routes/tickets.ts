@@ -20,6 +20,7 @@ import {
   userCanUseTeam,
 } from '../tickets.js'
 import { seedRandomTickets } from '../ticket-seeding.js'
+import { removeTicketsForTeam } from '../ticket-removal.js'
 import {
   createTicketAttachment,
   deleteTicketAttachment,
@@ -628,5 +629,36 @@ adminTicketsRouter.post('/seed', requireAdmin, async (req, res) => {
     }
     console.error('Seeding random tickets failed.', error)
     res.status(500).json({ error: 'ticket_seed_failed' })
+  }
+})
+
+adminTicketsRouter.post('/remove', requireAdmin, async (req, res) => {
+  const user = req.user!
+  const dryRun = req.body?.dryRun === true
+  const teamId =
+    typeof req.body?.teamId === 'string' && req.body.teamId.trim().length > 0
+      ? req.body.teamId.trim()
+      : undefined
+
+  if (!teamId) {
+    res.status(400).json({ error: 'team_id_required' })
+    return
+  }
+
+  try {
+    const result = await removeTicketsForTeam({
+      teamId,
+      organizationId: user.organizationId,
+      dryRun,
+    })
+    res.json({ result })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : ''
+    if (message === 'team_not_found') {
+      res.status(400).json({ error: 'team_not_found' })
+      return
+    }
+    console.error('Removing tickets failed.', error)
+    res.status(500).json({ error: 'ticket_removal_failed' })
   }
 })

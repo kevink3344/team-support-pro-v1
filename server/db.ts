@@ -1008,7 +1008,7 @@ const seedSettingsTabs = async (db: Client): Promise<void> => {
     ],
     configuration: [
       'authentication', 'categories', 'locations', 'powerBi',
-      'trendSeeding', 'ticketSeeding',
+      'trendSeeding', 'ticketSeeding', 'ticketRemoval',
     ],
     storage: [
       'email', 'feedbackForm', 'webhooks',

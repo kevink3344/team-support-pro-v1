@@ -121,6 +121,7 @@ type SettingsAccordionSection =
   | 'manageTeams'
   | 'trendSeeding'
   | 'ticketSeeding'
+  | 'ticketRemoval'
   | 'categories'
   | 'locations'
   | 'email'
@@ -192,6 +193,7 @@ const defaultSettingsAccordionOrder: SettingsAccordionSection[] = [
   'manageTeams',
   'trendSeeding',
   'ticketSeeding',
+  'ticketRemoval',
   'categories',
   'locations',
   'email',
@@ -665,6 +667,7 @@ function App() {
     manageTeams: false,
     trendSeeding: false,
     ticketSeeding: false,
+    ticketRemoval: false,
     categories: false,
     locations: false,
     email: false,
@@ -727,6 +730,15 @@ function App() {
   const [ticketSeedPending, setTicketSeedPending] = useState(false)
   const [ticketSeedError, setTicketSeedError] = useState('')
   const [ticketSeedNotice, setTicketSeedNotice] = useState('')
+  const [ticketRemovalTeamId, setTicketRemovalTeamId] = useState('')
+  const [ticketRemovalPending, setTicketRemovalPending] = useState(false)
+  const [ticketRemovalError, setTicketRemovalError] = useState('')
+  const [ticketRemovalNotice, setTicketRemovalNotice] = useState('')
+  const [ticketRemovalConfirm, setTicketRemovalConfirm] = useState<{
+    teamId: string
+    teamName: string
+    deleted: number
+  } | null>(null)
   const [changePasswordModal, setChangePasswordModal] = useState<{ userId: string; userName: string } | null>(null)
   const [changePasswordValue, setChangePasswordValue] = useState('')
   const [changePasswordPending, setChangePasswordPending] = useState(false)
@@ -2423,6 +2435,130 @@ function App() {
       setTicketSeedError('Tickets could not be seeded. Confirm the backend server is running.')
     } finally {
       setTicketSeedPending(false)
+    }
+  }
+
+  const submitTicketRemovalDryRun = async () => {
+    setTicketRemovalError('')
+    setTicketRemovalNotice('')
+    if (!ticketRemovalTeamId) {
+      setTicketRemovalError('Select a team to remove tickets for.')
+      return
+    }
+    try {
+      const response = await fetch(apiUrl('/api/admin/tickets/remove'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({ teamId: ticketRemovalTeamId, dryRun: true }),
+      })
+
+      if (response.status === 401) {
+        setAuthSession(null)
+        return
+      }
+      if (response.status === 403) {
+        setTicketRemovalError('Administrator access is required to remove tickets.')
+        return
+      }
+      if (response.status === 400) {
+        const payload = (await response.json()) as { error?: string }
+        if (payload.error === 'team_not_found') {
+          setTicketRemovalError('The selected team does not exist in this organization.')
+        } else {
+          setTicketRemovalError('Tickets could not be removed. Check the organization configuration.')
+        }
+        return
+      }
+      if (!response.ok) {
+        setTicketRemovalError('Tickets could not be removed. Please try again.')
+        return
+      }
+
+      const payload = (await response.json()) as {
+        result?: { teamName?: string; deleted?: number }
+      }
+      const team = teams.find((entry) => entry.id === ticketRemovalTeamId)
+      setTicketRemovalConfirm({
+        teamId: ticketRemovalTeamId,
+        teamName: team?.name ?? payload.result?.teamName ?? 'the selected team',
+        deleted: payload.result?.deleted ?? 0,
+      })
+    } catch {
+      setTicketRemovalError('Tickets could not be removed. Confirm the backend server is running.')
+    }
+  }
+
+  const confirmTicketRemoval = async () => {
+    if (!ticketRemovalConfirm) {
+      return
+    }
+    const { teamId } = ticketRemovalConfirm
+    setTicketRemovalConfirm(null)
+    setTicketRemovalPending(true)
+    setTicketRemovalError('')
+    setTicketRemovalNotice('')
+
+    try {
+      const response = await fetch(apiUrl('/api/admin/tickets/remove'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({ teamId }),
+      })
+
+      if (response.status === 401) {
+        setAuthSession(null)
+        return
+      }
+      if (response.status === 403) {
+        setTicketRemovalError('Administrator access is required to remove tickets.')
+        return
+      }
+      if (response.status === 400) {
+        const payload = (await response.json()) as { error?: string }
+        setTicketRemovalError(
+          payload.error === 'team_not_found'
+            ? 'The selected team does not exist in this organization.'
+            : 'Tickets could not be removed. Check the organization configuration.',
+        )
+        return
+      }
+      if (!response.ok) {
+        setTicketRemovalError('Tickets could not be removed. Please try again.')
+        return
+      }
+
+      const payload = (await response.json()) as {
+        result?: { deleted?: number; teamName?: string }
+      }
+      const deleted = payload.result?.deleted ?? 0
+      setTicketRemovalNotice(
+        deleted === 0
+          ? 'No tickets were found for that team.'
+          : `Removed ${deleted} tickets for ${payload.result?.teamName ?? 'the selected team'}.`,
+      )
+
+      const nextTickets = await fetchTickets()
+      if (Array.isArray(nextTickets)) {
+        setTickets(nextTickets)
+      }
+      const nextSummary = await fetchDashboardSummary()
+      if (nextSummary) {
+        setDashboardSummary(nextSummary)
+      }
+      const nextTrends = await fetchDashboardTrends()
+      if (Array.isArray(nextTrends) && nextTrends.length > 0) {
+        setTrendPoints(nextTrends)
+      }
+    } catch {
+      setTicketRemovalError('Tickets could not be removed. Confirm the backend server is running.')
+    } finally {
+      setTicketRemovalPending(false)
     }
   }
 
@@ -7517,6 +7653,61 @@ function App() {
               )}
             </div>
           )
+        case 'ticketRemoval':
+          return (
+            <div className="settings-accordion-content space-y-3">
+              {currentUser.role !== 'Admin' && currentUser.role !== 'Super Admin' ? (
+                <div className="rounded-[2px] border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                  Administrator access is required to remove tickets.
+                </div>
+              ) : (
+                <>
+                  <p className="text-sm text-[color:var(--text-muted)]">
+                    Permanently delete all tickets for the selected team, including activity, attachments, comments, versions, and watchers. This action cannot be undone.
+                  </p>
+                  {ticketRemovalError && (
+                    <div className="rounded-[2px] border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                      {ticketRemovalError}
+                    </div>
+                  )}
+                  {ticketRemovalNotice && (
+                    <div className="rounded-[2px] border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+                      {ticketRemovalNotice}
+                    </div>
+                  )}
+                  <div className="surface-muted grid gap-3 p-4 md:grid-cols-[1fr_auto] md:items-end">
+                    <label className="space-y-2">
+                      <div className="text-xs uppercase tracking-[0.12em] text-[color:var(--text-muted)]">
+                        Target team
+                      </div>
+                      <select
+                        className="input-control"
+                        value={ticketRemovalTeamId}
+                        onChange={(event) => setTicketRemovalTeamId(event.target.value)}
+                      >
+                        <option value="">Select a team</option>
+                        {teams
+                          .filter((team) => team.organizationId === currentUser.organizationId)
+                          .map((team) => (
+                            <option key={team.id} value={team.id}>
+                              {team.name}
+                            </option>
+                          ))}
+                      </select>
+                    </label>
+                    <button
+                      type="button"
+                      className="bg-red-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={ticketRemovalPending || !ticketRemovalTeamId}
+                      onClick={() => void submitTicketRemovalDryRun()}
+                    >
+                      {ticketRemovalPending ? 'Working...' : 'Delete All Tickets'}
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          )
         case 'categories':
           return (
             <div className="settings-accordion-content space-y-3">
@@ -8547,6 +8738,10 @@ function App() {
       ticketSeeding: {
         title: 'Ticket Seeding',
         description: 'Create random sample tickets for testing and demos.',
+      },
+      ticketRemoval: {
+        title: 'Ticket Removal',
+        description: 'Permanently delete all tickets for a selected team.',
       },
       categories: {
         title: 'Categories',
@@ -10431,7 +10626,7 @@ function App() {
                             Add Comment
                           </div>
                           <div className="text-sm text-[color:var(--text-muted)]">
-                            Comments are added to the ticket activity feed. Use @handle to notify teammates.
+                            Comments are added to the ticket activity feed.
                           </div>
                         </div>
                         <textarea
@@ -10787,6 +10982,67 @@ function App() {
                 {quickActionPendingTicketId === quickActionConfirmation.ticketId
                   ? 'Updating...'
                   : getQuickActionCopy(quickActionConfirmation.action).buttonLabel}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {ticketRemovalConfirm && (
+        <>
+          <button
+            type="button"
+            className="fixed inset-0 z-40 bg-slate-950/40"
+            aria-label="Close dialog"
+            onClick={() => setTicketRemovalConfirm(null)}
+          />
+          <div
+            role="dialog"
+            aria-modal={true}
+            aria-labelledby="ticket-removal-confirm-title"
+            className="surface fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 p-6 shadow-[0_24px_64px_rgba(13,47,79,0.22)]"
+          >
+            <div className="mb-4 flex items-start gap-3">
+              <div className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-[2px] bg-[color:var(--panel-bg)] text-[color:var(--accent)]">
+                <TriangleAlert className="h-5 w-5" />
+              </div>
+              <div>
+                <h2 id="ticket-removal-confirm-title" className="mb-1 text-base font-semibold text-[color:var(--text)]">
+                  Delete all tickets?
+                </h2>
+                <p className="text-sm text-[color:var(--text-muted)]">
+                  This permanently deletes every ticket for this team, including activity, attachments, comments, versions, and watchers. This action cannot be undone.
+                </p>
+              </div>
+            </div>
+
+            <div className="surface-muted mb-4 space-y-1 p-3">
+              <div className="text-sm font-semibold text-[color:var(--text)]">
+                {ticketRemovalConfirm.teamName}
+              </div>
+              <div className="text-sm text-[color:var(--text-muted)]">
+                {ticketRemovalConfirm.deleted === 0
+                  ? 'No tickets were found for this team.'
+                  : `${ticketRemovalConfirm.deleted} ticket${ticketRemovalConfirm.deleted === 1 ? '' : 's'} will be deleted.`}
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => setTicketRemovalConfirm(null)}
+                disabled={ticketRemovalPending}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="bg-red-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+                onClick={() => void confirmTicketRemoval()}
+                disabled={ticketRemovalPending}
+              >
+                {ticketRemovalPending ? 'Deleting...' : 'Delete Tickets'}
               </button>
             </div>
           </div>
